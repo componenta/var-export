@@ -1,0 +1,47 @@
+{
+    "name": "componenta/var-export",
+    "description": "Export PHP variables to their string representation with support for closures, arrays, and configurable formatting",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "var_export",
+        "export",
+        "closure",
+        "array",
+        "serialization",
+        "code-generation"
+    ],
+    "authors": [
+        {
+            "name": "Componenta",
+            "email": "dev@Componenta.io"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "nikic/php-parser": "^5.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Componenta\\VarExport\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Componenta\\VarExport\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-html coverage"
+    }
+}
