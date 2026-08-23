@@ -1,6 +1,6 @@
 {
     "name": "componenta/var-export",
-    "description": "Generate deterministic executable PHP expressions for scalars, arrays, closures, enums, and readonly value objects",
+    "description": "Generate deterministic executable PHP expressions for scalars, arrays, closures, enums, and explicitly enabled readonly value objects",
     "type": "library",
     "license": "MIT",
     "keywords": [
@@ -61,5 +61,10 @@
             "@phpstan",
             "@test"
         ]
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "2.x-dev"
+        }
     }
 }
