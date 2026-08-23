@@ -15,8 +15,12 @@ interface ObjectExporterInterface
     public function exportWithDepth(object $object, int $depth): string;
 
     /**
-     * Exact preflight for the current instance. A true result means export()
-     * completed successfully for that instance; false means it did not.
+     * Structural/source-generation preflight for the current instance.
+     *
+     * A true result means this exporter can produce PHP source for the current
+     * instance. It does not execute the generated expression and therefore
+     * cannot prove that replaying an opted-in user constructor is side-effect
+     * free or accepts reflection/unserialization-hydrated state.
      */
     public function supports(object $object): bool;
 
