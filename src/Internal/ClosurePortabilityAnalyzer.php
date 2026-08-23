@@ -77,6 +77,7 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
             }
 
             $this->assertPortableName($node->name, 'constant', $node->getStartLine());
+            $this->assertConstantIsNotRuntimeUserDefined($node->name, $node->getStartLine());
         }
 
         return null;
@@ -112,7 +113,7 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
             return;
         }
 
-        $function = $this->resolvedFunctionName($name);
+        $function = $this->resolvedName($name);
         if ($function === null || !function_exists($function)) {
             return;
         }
@@ -148,7 +149,31 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
         );
     }
 
-    private function resolvedFunctionName(Name $name): ?string
+    private function assertConstantIsNotRuntimeUserDefined(Name $name, int $line): void
+    {
+        $constant = $this->resolvedName($name);
+        if ($constant === null) {
+            return;
+        }
+
+        $constant = ltrim($constant, '\\');
+        $groups = get_defined_constants(true);
+        $userConstants = $groups['user'] ?? [];
+        if (!array_key_exists($constant, $userConstants)) {
+            return;
+        }
+
+        throw ClosureExportException::nonPortableExpression(
+            sprintf(
+                'runtime user-defined constant "%s" is not guaranteed to exist when the generated artifact is loaded; use a literal, enum, or class constant',
+                $constant,
+            ),
+            $this->filename,
+            $line ?: $this->line,
+        );
+    }
+
+    private function resolvedName(Name $name): ?string
     {
         if ($name instanceof FullyQualified) {
             return $name->toString();
