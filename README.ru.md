@@ -25,7 +25,7 @@ VarExport использует **value semantics**. Поддерживаются
 - массивы без PHP references;
 - замыкания с доступным исходным файлом;
 - enum cases;
-- реконструируемые readonly value objects, всё состояние которых представлено публичными concrete promoted-параметрами конструктора без hooks.
+- readonly value objects только при явном включении generic readonly export либо через class-specific exporter.
 
 Сознательно отклоняются либо не сохраняются:
 
@@ -34,6 +34,7 @@ VarExport использует **value semantics**. Поддерживаются
 - identity при нескольких ссылках на один объект;
 - mutable objects;
 - anonymous readonly classes;
+- generic readonly objects без явного opt-in;
 - readonly classes, состояние которых нельзя доказуемо восстановить через promoted constructor properties;
 - closures, привязанные к `$this`;
 - class-scoped closures, у которых lexical и called class различаются;
@@ -70,9 +71,11 @@ $expression = Export::toFile(['env' => 'prod']);
 ## Конфигурация
 
 ```php
+use Componenta\VarExport\Config\ClosureExportPolicy;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Config\FormatterMode;
+use Componenta\VarExport\Config\SourcePathPolicy;
 
 $config = new ExportConfig(
     mode: FormatterMode::Pretty,
@@ -81,6 +84,9 @@ $config = new ExportConfig(
     sortKeys: false,
     trailingComma: true,
     closureUseMode: ClosureUseMode::Preserve,
+    allowGenericReadonlyObjects: false,
+    closureExportPolicy: ClosureExportPolicy::SourceBound,
+    sourcePathPolicy: SourcePathPolicy::AbsoluteBuildPath,
 );
 ```
 
@@ -117,7 +123,9 @@ $config = new ExportConfig(
 
 ## Namespace и class scope closure
 
-Source cache индексирует closures по строке и namespace. При экспорте фиксируется исходное разрешение unqualified functions/constants, class references становятся FQN, magic constants заменяются source-значениями.
+Source cache индексирует closures по строке и namespace. В режиме `SourceBound` фиксируется исходное разрешение unqualified functions/constants, class references становятся FQN, magic constants заменяются source-значениями.
+
+Для build/cache артефактов используйте `ClosureExportPolicy::PortableExpression`. Такой режим всегда отклоняет `__FILE__`/`__DIR__`, `include`/`require`, `eval()` и namespace-fallback для unqualified functions/constants вместо создания непереносимого cache. Imported/FQ external functions разрешены, но функции, объявленные в source-файле самого provider, отклоняются: этот файл может не загружаться вместе с cache. Runtime user-defined constants также отклоняются, поскольку их объявление не гарантировано при загрузке артефакта. `SourcePathPolicy::Reject` дополнительно позволяет запретить `__FILE__`/`__DIR__` и в режиме `SourceBound`.
 
 Class-scoped closure поддерживается, если lexical и called class совпадают. Scope восстанавливается через `Closure::bind()`, поэтому `self::`, `parent::`, private/protected access и magic constants сохраняют семантику.
 
@@ -125,16 +133,20 @@ Closure с `$this` и late-static-binding сценарии с разными lex
 
 ## Readonly value objects
 
-Объект считается поддерживаемым только при доказуемой реконструкции состояния:
+Generic readonly export **выключен по умолчанию**. Reflection не позволяет доказать, что произвольный instance действительно был создан конструктором: объект может быть hydrated через Reflection/serialization, а повторный вызов конструктора способен выбросить исключение или изменить поведение.
 
-- класс `readonly` и не anonymous;
-- constructor public;
-- параметры не variadic и не by-reference;
-- параметры являются public promoted concrete properties;
-- virtual/property-hook свойства отклоняются;
-- дополнительное instance state вне constructor parameters отклоняется.
+Для контролируемых constructor value objects доступен явный opt-in:
 
-`ObjectExporter::supports()` — точный preflight текущего instance: метод пробует построить representation без выполнения generated code и возвращает `false` при любом неподдерживаемом состоянии.
+```php
+$config = (new ExportConfig())
+    ->withGenericReadonlyObjects();
+```
+
+В opt-in режиме класс должен быть `readonly` и не anonymous, constructor — public, параметры — public promoted concrete properties без hooks, variadic/by-reference и дополнительного instance state. `__unserialize()` также отклоняется. Generated expression всё равно вызывает constructor при восстановлении, поэтому для framework/cache descriptors предпочтителен class-specific exporter.
+
+## Единый recursive dispatcher
+
+При использовании через `VarExporter` все вложенные значения снова проходят через корневой dispatcher. `ArrayExporter` и `ObjectExporter` не выбирают стратегию для nested values самостоятельно. `ExportContext` переносит depth и path, а custom object exporters, передаваемые в `VarExporter`, должны реализовывать `ContextualObjectExporterInterface`. Это принципиальная часть контракта: специальные типы остаются видимыми на любой глубине и не обходятся fallback-экспортёром.
 
 ## Переиспользование и source cache
 

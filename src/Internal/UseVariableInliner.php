@@ -31,6 +31,7 @@ final readonly class UseVariableInliner
         Closure|ArrowFunction $closure,
         array $variables,
         int $maxDepth,
+        int $captureDepth = 1,
         ?string $filename = null,
         ?int $line = null,
     ): Node\Expr {
@@ -46,6 +47,7 @@ final readonly class UseVariableInliner
                     $value,
                     $name,
                     $maxDepth,
+                    depth: $captureDepth,
                     filename: $filename,
                     line: $line,
                 ),

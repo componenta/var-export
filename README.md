@@ -25,7 +25,7 @@ VarExport uses **value semantics**. It supports:
 - arrays that do not contain PHP references;
 - closures whose source file is available;
 - enum cases;
-- reconstructable readonly value objects whose complete instance state is represented by public, concrete, hook-free promoted constructor properties.
+- readonly value objects only when generic readonly export is explicitly enabled, or when a caller supplies a class-specific object exporter.
 
 It deliberately rejects or does not preserve:
 
@@ -34,6 +34,7 @@ It deliberately rejects or does not preserve:
 - object identity between repeated references to the same instance;
 - mutable objects;
 - anonymous readonly classes;
+- generic readonly objects unless explicitly enabled;
 - readonly classes whose state cannot be proven reconstructable from promoted constructor properties;
 - closures bound to `$this`;
 - class-scoped closures where lexical and called class differ;
@@ -71,9 +72,11 @@ Primitive serialization is delegated to PHP's own `var_export()` representation.
 ## Configuration
 
 ```php
+use Componenta\VarExport\Config\ClosureExportPolicy;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Config\FormatterMode;
+use Componenta\VarExport\Config\SourcePathPolicy;
 
 $config = new ExportConfig(
     mode: FormatterMode::Pretty,
@@ -82,6 +85,9 @@ $config = new ExportConfig(
     sortKeys: false,
     trailingComma: true,
     closureUseMode: ClosureUseMode::Preserve,
+    allowGenericReadonlyObjects: false,
+    closureExportPolicy: ClosureExportPolicy::SourceBound,
+    sourcePathPolicy: SourcePathPolicy::AbsoluteBuildPath,
 );
 ```
 
@@ -142,7 +148,9 @@ Use this mode for self-contained cache artifacts. By-reference captures remain u
 
 ## Closure namespaces and class scope
 
-The source cache indexes closures by source line and namespace. Generated code freezes source namespace resolution for unqualified function/constant calls at export time, fully qualifies class references, and substitutes magic constants with their source values.
+The source cache indexes closures by source line and namespace. In the default `SourceBound` policy, generated code freezes source namespace resolution for unqualified function/constant calls at export time, fully qualifies class references, and substitutes magic constants with their source values.
+
+For build artifacts use `ClosureExportPolicy::PortableExpression`. In this mode VarExport rejects source-location-dependent constructs instead of producing a cache whose behavior can differ after deployment: `__FILE__`/`__DIR__`, `include`/`require`, `eval()`, and unqualified function/constant fallback inside namespaces are rejected. Imported or fully-qualified external functions remain valid; functions defined in the closure provider source file are rejected because that file may not be loaded with the artifact. Runtime user-defined constants are rejected as well because their definition is not guaranteed to be present when the artifact is loaded. `SourcePathPolicy::Reject` can additionally forbid `__FILE__`/`__DIR__` in `SourceBound` mode.
 
 Static/class-scoped closures can be preserved when their lexical and called class are the same. The generated expression restores the class scope using `Closure::bind()`. This allows `self::`, `parent::`, private/protected access, and source magic constants to retain their intended semantics.
 
@@ -150,7 +158,9 @@ Closures bound to an object (`$this`) and late-static-binding cases where lexica
 
 ## Readonly value objects
 
-A readonly object is supported only when its state is provably reconstructable:
+Generic readonly-object export is **disabled by default**. Structural reflection cannot prove that an arbitrary instance was created by the constructor: reflection/unserialization hydration can produce state for which replaying the constructor throws or changes behavior. Prefer a class-specific exporter for framework/cache descriptor types.
+
+Explicit opt-in is available for controlled constructor value objects:
 
 ```php
 enum Priority: string
@@ -169,10 +179,20 @@ final readonly class Task
     }
 }
 
-$code = Export::var(new Task('Ship', Priority::High, ['core']));
+$config = (new ExportConfig())
+    ->withGenericReadonlyObjects();
+
+$code = Export::var(
+    new Task('Ship', Priority::High, ['core']),
+    $config,
+);
 ```
 
-The constructor must be public. Parameters must not be variadic or by-reference and must be promoted public properties. Virtual/hooked properties and extra instance state are rejected. `ObjectExporter::supports()` performs an exact preflight for the current instance by attempting the non-executing source export and returns `false` on any unsupported state.
+In opt-in mode the constructor must be public; parameters must not be variadic or by-reference and must be promoted public properties. Virtual/hooked properties, extra instance state, anonymous classes and `__unserialize()` hydration are rejected. The generated expression still executes the constructor at restore time, so opt in only for classes whose constructor is part of their stable value contract.
+
+## Recursive dispatcher
+
+`VarExporter` is the single recursive value dispatcher. Arrays and generic objects never select a nested exporter on their own when they are used through `VarExporter`; nested values are routed back through the root dispatcher with an `ExportContext` containing depth and value path. Custom object exporters supplied to `VarExporter` must implement `ContextualObjectExporterInterface`. This is intentional: every nested value must return to the same root dispatcher so framework-specific values remain visible at every nesting level instead of being bypassed by a fallback exporter.
 
 ## Reusing exporters and source cache
 

@@ -23,13 +23,13 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
     private ValueFormatterInterface $valueFormatter;
     private ArrayExporterInterface $arrayExporter;
     private ClosureExporterInterface $closureExporter;
-    private ObjectExporterInterface $objectExporter;
+    private ContextualObjectExporterInterface $objectExporter;
     private ClosureSourceCacheInterface $sourceCache;
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
         ?ClosureSourceCacheInterface $astCache = null,
-        ?ObjectExporterInterface $objectExporter = null,
+        ?ContextualObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
         ?ClosureExporterInterface $closureExporter = null,
     ) {
@@ -43,11 +43,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
             closureExporter: $this->closureExporter,
         );
 
-        if ($objectExporter instanceof ContextualObjectExporterInterface) {
-            $objectExporter = $objectExporter->withValueExporter($this);
-        }
-
-        $this->objectExporter = $objectExporter;
+        $this->objectExporter = $objectExporter->withValueExporter($this);
         $this->arrayExporter = new ArrayExporter(
             $config,
             $this->closureExporter,
@@ -88,9 +84,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
                 ? $this->arrayExporter->exportWithContext($value, $context)
                 : $this->arrayExporter->exportAtDepth($value, $context->depth, $context->baseIndent),
             $value instanceof Closure => $this->closureExporter->exportWithDepth($value, $context->depth),
-            is_object($value) => $this->objectExporter instanceof ContextualObjectExporterInterface
-                ? $this->objectExporter->exportWithContext($value, $context)
-                : $this->objectExporter->exportWithDepth($value, $context->depth),
+            is_object($value) => $this->objectExporter->exportWithContext($value, $context),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
             default => throw ExportException::unsupportedType($value),
         };
