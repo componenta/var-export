@@ -10,6 +10,11 @@ function unqualifiedFunctionClosure(): Closure { return static fn(): int => strl
 function unqualifiedConstantClosure(): Closure { return static fn(): int => PHP_INT_MAX; }
 function fileClosure(): Closure { return static fn(): string => __FILE__; }
 function evalClosure(): Closure { return static fn(): mixed => eval('return 42;'); }
+function providerLocalHelper(): string { return 'provider-local'; }
+function fullyQualifiedProviderLocalClosure(): Closure
+{
+    return static fn(): string => \Componenta\VarExport\Tests\Fixture\PortableUnqualified\providerLocalHelper();
+}
 
 namespace Componenta\VarExport\Tests\Fixture\PortableImported;
 
