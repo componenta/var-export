@@ -21,6 +21,7 @@ use function Componenta\VarExport\Tests\Fixture\PortableImported\importedFunctio
 use function Componenta\VarExport\Tests\Fixture\PortableImported\qualifiedFunctionClosure;
 use function Componenta\VarExport\Tests\Fixture\PortableUnqualified\evalClosure;
 use function Componenta\VarExport\Tests\Fixture\PortableUnqualified\fileClosure;
+use function Componenta\VarExport\Tests\Fixture\PortableUnqualified\fullyQualifiedProviderLocalClosure;
 use function Componenta\VarExport\Tests\Fixture\PortableUnqualified\unqualifiedConstantClosure;
 use function Componenta\VarExport\Tests\Fixture\PortableUnqualified\unqualifiedFunctionClosure;
 
@@ -60,11 +61,17 @@ it('rejects namespace fallback constants in portable-expression mode', function 
     expect(fn() => Export::closure(unqualifiedConstantClosure(), $config))->toThrow(ClosureExportException::class, 'unqualified constant');
 });
 
-it('allows imported and fully-qualified functions in portable-expression mode', function (): void {
+it('allows imported and fully-qualified external functions in portable-expression mode', function (): void {
     $config = (new ExportConfig())->withClosureExportPolicy(ClosureExportPolicy::PortableExpression);
     $imported = eval('return ' . Export::closure(importedFunctionClosure(), $config) . ';');
     $qualified = eval('return ' . Export::closure(qualifiedFunctionClosure(), $config) . ';');
     expect($imported())->toBe(3)->and($qualified())->toBe(3);
+});
+
+it('rejects provider-local named functions even when fully qualified', function (): void {
+    $config = (new ExportConfig())->withClosureExportPolicy(ClosureExportPolicy::PortableExpression);
+    expect(fn() => Export::closure(fullyQualifiedProviderLocalClosure(), $config))
+        ->toThrow(ClosureExportException::class, 'provider source file');
 });
 
 it('rejects source paths under explicit source-path policy', function (): void {
