@@ -34,6 +34,13 @@ function nestedCaptureFactory(string $value): Closure
     };
 }
 
+function nestedMagicFactory(): Closure
+{
+    return static function (): Closure {
+        return static fn(): array => [__FUNCTION__, __METHOD__, __LINE__];
+    };
+}
+
 function localSymbolClosure(): Closure
 {
     return static fn(): array => [local_function(), LOCAL_CONSTANT];
