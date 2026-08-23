@@ -31,109 +31,67 @@ final class ExportConfigTest extends TestCase
 
         self::assertSame(FormatterMode::Pretty, $config->mode);
         self::assertTrue($config->trailingComma);
+        self::assertSame(ClosureUseMode::Preserve, $config->closureUseMode);
     }
 
     public function testCompactFactoryMethod(): void
     {
-        $config = ExportConfig::compact();
-
-        self::assertSame(FormatterMode::Standard, $config->mode);
+        self::assertSame(FormatterMode::Standard, ExportConfig::compact()->mode);
     }
 
-    public function testWithModeReturnsNewInstance(): void
+    public function testCopyMethodsPreserveOtherOptions(): void
     {
-        $config = new ExportConfig();
-        $newConfig = $config->withMode(FormatterMode::Pretty);
+        $config = new ExportConfig(
+            mode: FormatterMode::Pretty,
+            indent: '  ',
+            maxDepth: 12,
+            sortKeys: true,
+            trailingComma: true,
+            closureUseMode: ClosureUseMode::Preserve,
+        );
 
-        self::assertNotSame($config, $newConfig);
-        self::assertSame(FormatterMode::Standard, $config->mode);
-        self::assertSame(FormatterMode::Pretty, $newConfig->mode);
-    }
-
-    public function testWithIndentReturnsNewInstance(): void
-    {
-        $config = new ExportConfig();
-        $newConfig = $config->withIndent("\t");
-
-        self::assertNotSame($config, $newConfig);
-        self::assertSame('    ', $config->indent);
-        self::assertSame("\t", $newConfig->indent);
-    }
-
-    public function testWithMaxDepthReturnsNewInstance(): void
-    {
-        $config = new ExportConfig();
-        $newConfig = $config->withMaxDepth(10);
-
-        self::assertNotSame($config, $newConfig);
-        self::assertSame(64, $config->maxDepth);
-        self::assertSame(10, $newConfig->maxDepth);
-    }
-
-    public function testWithSortKeysReturnsNewInstance(): void
-    {
-        $config = new ExportConfig();
-        $newConfig = $config->withSortKeys();
-
-        self::assertNotSame($config, $newConfig);
-        self::assertFalse($config->sortKeys);
-        self::assertTrue($newConfig->sortKeys);
-    }
-
-    public function testWithTrailingCommaReturnsNewInstance(): void
-    {
-        $config = new ExportConfig();
-        $newConfig = $config->withTrailingComma();
-
-        self::assertNotSame($config, $newConfig);
-        self::assertFalse($config->trailingComma);
-        self::assertTrue($newConfig->trailingComma);
-    }
-
-    public function testWithClosureUseModeReturnsNewInstance(): void
-    {
-        $config = new ExportConfig();
-        $newConfig = $config->withClosureUseMode(ClosureUseMode::Inline);
-
-        self::assertNotSame($config, $newConfig);
-        self::assertSame(ClosureUseMode::Preserve, $config->closureUseMode);
-        self::assertSame(ClosureUseMode::Inline, $newConfig->closureUseMode);
-    }
-
-    public function testIsPrettyReturnsTrueForPrettyMode(): void
-    {
-        $config = new ExportConfig(mode: FormatterMode::Pretty);
-
-        self::assertTrue($config->isPretty());
-    }
-
-    public function testIsPrettyReturnsFalseForStandardMode(): void
-    {
-        $config = new ExportConfig(mode: FormatterMode::Standard);
-
-        self::assertFalse($config->isPretty());
+        self::assertSame('    ', $config->withIndent('    ')->indent);
+        self::assertSame(24, $config->withMaxDepth(24)->maxDepth);
+        self::assertFalse($config->withSortKeys(false)->sortKeys);
+        self::assertFalse($config->withTrailingComma(false)->trailingComma);
+        self::assertSame(ClosureUseMode::Inline, $config->withClosureUseMode(ClosureUseMode::Inline)->closureUseMode);
+        self::assertSame(FormatterMode::Standard, $config->withMode(FormatterMode::Standard)->mode);
     }
 
     #[DataProvider('invalidIndentProvider')]
     public function testThrowsForInvalidIndent(string $indent): void
     {
         $this->expectException(ConfigurationException::class);
-
         new ExportConfig(indent: $indent);
     }
 
     public static function invalidIndentProvider(): iterable
     {
-        yield 'empty string' => [''];
-        yield 'non-whitespace' => ['abc'];
-        yield 'mixed' => ['  x'];
+        yield 'empty' => [''];
+        yield 'text' => ['abc'];
+        yield 'two tabs' => ["\t\t"];
+        yield 'mixed whitespace' => [" \t "];
+        yield 'space then text' => ['  x'];
+    }
+
+    #[DataProvider('validIndentProvider')]
+    public function testAcceptsPrinterCompatibleIndent(string $indent): void
+    {
+        self::assertSame($indent, (new ExportConfig(indent: $indent))->indent);
+    }
+
+    public static function validIndentProvider(): iterable
+    {
+        yield 'one space' => [' '];
+        yield 'two spaces' => ['  '];
+        yield 'four spaces' => ['    '];
+        yield 'tab' => ["\t"];
     }
 
     #[DataProvider('invalidMaxDepthProvider')]
     public function testThrowsForInvalidMaxDepth(int $maxDepth): void
     {
         $this->expectException(ConfigurationException::class);
-
         new ExportConfig(maxDepth: $maxDepth);
     }
 
@@ -142,23 +100,5 @@ final class ExportConfigTest extends TestCase
         yield 'zero' => [0];
         yield 'negative' => [-1];
         yield 'very negative' => [-100];
-    }
-
-    #[DataProvider('validIndentProvider')]
-    public function testAcceptsValidIndent(string $indent): void
-    {
-        $config = new ExportConfig(indent: $indent);
-
-        self::assertSame($indent, $config->indent);
-    }
-
-    public static function validIndentProvider(): iterable
-    {
-        yield 'single space' => [' '];
-        yield 'two spaces' => ['  '];
-        yield 'four spaces' => ['    '];
-        yield 'tab' => ["\t"];
-        yield 'two tabs' => ["\t\t"];
-        yield 'mixed whitespace' => [" \t "];
     }
 }

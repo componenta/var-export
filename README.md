@@ -1,242 +1,236 @@
 # Componenta VarExport
 
-[![PHP Version](https://img.shields.io/badge/php-%5E8.4-blue.svg)](https://www.php.net/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-243%20passing-brightgreen.svg)](tests)
+[![CI](https://github.com/componenta/var-export/actions/workflows/ci.yml/badge.svg)](https://github.com/componenta/var-export/actions/workflows/ci.yml)
 
-Round-trip PHP values to executable source code. Unlike `var_export()`, this library handles **closures**, **readonly value objects** and **enums** — and keeps namespace semantics intact so the exported code evaluates correctly anywhere.
+Generate deterministic executable PHP expressions for values that the library can reproduce safely.
+
+The stable entry points are `Export`, `VarExporterInterface`, `VarExporter`, and `ExportConfig`. Lower-level array, closure, object, and source-cache contracts are available for advanced composition.
 
 [Русская версия](README.ru.md)
-
----
-
-## Features
-
-- **Closures** — full AST-based export with correct name resolution (class refs → FQN, function/constant refs keep global fallback)
-- **Readonly value objects** — round-tripped via `new ClassName(...)` when every constructor parameter is a public property
-- **Enums** — both pure and backed cases
-- **Arrays** — sequential, associative, mixed, unlimited nesting (guarded by `maxDepth`)
-- **Configurable output** — pretty or compact layout, custom indent, sorted keys, trailing commas
-- **Typed exceptions** — precise error context without leaking the values that caused them
-
----
 
 ## Requirements
 
 - PHP 8.4+
-- `nikic/php-parser` ^5.0
-
-## Related Packages
-
-| Package | Why it matters here |
-|---|---|
-| `componenta/config` | Uses export for executable PHP configuration cache files. |
-| `componenta/app` | Application cache can persist compiled arrays and descriptors as PHP files. |
-| `componenta/di` | Compiled DI plans and dependency cache should be executable PHP arrays. |
-| `nikic/php-parser` | Required for closure export and name-resolution semantics. |
-
----
-
-## Installation
+- `nikic/php-parser` 5.8+
 
 ```bash
 composer require componenta/var-export
 ```
 
----
+## Supported value model
+
+VarExport uses **value semantics**. It supports:
+
+- `null`, booleans, integers, floats, and arbitrary byte strings;
+- arrays that do not contain PHP references;
+- closures whose source file is available;
+- enum cases;
+- reconstructable readonly value objects whose complete instance state is represented by public, concrete, hook-free promoted constructor properties.
+
+It deliberately rejects or does not preserve:
+
+- resources;
+- array references and recursive reference arrays;
+- object identity between repeated references to the same instance;
+- mutable objects;
+- anonymous readonly classes;
+- readonly classes whose state cannot be proven reconstructable from promoted constructor properties;
+- closures bound to `$this`;
+- class-scoped closures where lexical and called class differ;
+- closures created by `eval()` or otherwise lacking readable source.
+
+When `sortKeys` is enabled, associative-array iteration order is intentionally canonicalized and therefore is not an order-preserving round trip.
 
 ## Quick start
 
 ```php
 use Componenta\VarExport\Export;
 
-// Any value — returns executable PHP code
-Export::var(['host' => 'localhost', 'port' => 5432]);
-// → ['host' => 'localhost', 'port' => 5432]
+$code = Export::var([
+    'host' => 'localhost',
+    'port' => 5432,
+    'ratio' => 0.10000000000000002,
+]);
 
-// Pretty layout (multi-line + trailing comma)
-Export::pretty([1, 2, 3]);
-// → [
-//       1,
-//       2,
-//       3,
-//   ]
-
-// Closures — namespace-aware
-$handler = static fn(int $x): int => $x * 2;
-Export::closure($handler);
-// → static fn(int $x): int => $x * 2
-
-// For file output — appends the semicolon
-Export::toFile(['env' => 'prod']);
-// → ['env' => 'prod'];
+$restored = eval("return {$code};");
 ```
 
-Round-trip works through `eval()` (and any PHP source file):
+For a complete PHP expression with a terminating semicolon:
 
 ```php
-$code = Export::var($original);
-$restored = eval("return {$code};");
-// $restored === $original
+$expression = Export::toFile(['env' => 'prod']);
+// ['env' => 'prod'];
 ```
 
----
+`toFile()` returns an expression plus `;`; it does not add `<?php` or `return`.
+
+## Exact primitive representation
+
+Primitive serialization is delegated to PHP's own `var_export()` representation. This avoids precision-dependent float formatting, preserves `PHP_INT_MIN` as an integer expression, and correctly handles NUL/control/binary string bytes.
 
 ## Configuration
 
 ```php
-use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Config\ClosureUseMode;
+use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Config\FormatterMode;
 
 $config = new ExportConfig(
-    mode:           FormatterMode::Pretty,
-    indent:         '    ',                 // spaces or tabs
-    maxDepth:       64,                     // guards runaway recursion
-    sortKeys:       false,                  // sort associative array keys
-    trailingComma:  true,                   // add trailing comma in pretty mode
+    mode: FormatterMode::Pretty,
+    indent: '    ',       // one or more spaces, or exactly one tab
+    maxDepth: 64,
+    sortKeys: false,
+    trailingComma: true,
     closureUseMode: ClosureUseMode::Preserve,
 );
+```
 
-// Presets
-ExportConfig::pretty();   // multi-line + trailing comma
-ExportConfig::compact();  // single-line
+`ExportConfig` is immutable; every `with*()` method returns a new copy.
 
-// Fluent copies (every with* returns a new instance)
+```php
 $config = ExportConfig::pretty()
     ->withIndent("\t")
     ->withSortKeys();
 ```
 
-### Reusing an exporter
+### Key sorting
 
-One-off calls go through the static facade. For many exports with the same configuration, instantiate `VarExporter` directly — the parsed-AST cache is reused across calls:
+With `sortKeys: true`, integer keys are ordered numerically before string keys, and string keys are ordered bytewise with `strcmp()`. Numeric-looking strings are still strings and never switch to numeric comparison.
+
+## Closure captures
+
+### `ClosureUseMode::Preserve` — default
+
+`Preserve` keeps the original lexical capture syntax. The generated expression is source-oriented rather than self-contained: required variables must exist where the generated code is evaluated.
+
+Use `Inline` explicitly when a self-contained executable representation is required. `Inline` freezes capture **values** into a creator expression while leaving the original closure body unchanged.
+
+Given:
+
+```php
+$multiplier = 2;
+$fn = static function (int $x) use ($multiplier): int {
+    $multiplier++;
+
+    return $x * $multiplier;
+};
+```
+
+VarExport conceptually emits:
+
+```php
+(static function () {
+    $multiplier = 2;
+
+    return static function (int $x) use ($multiplier): int {
+        $multiplier++;
+
+        return $x * $multiplier;
+    };
+})()
+```
+
+This preserves local write/lvalue semantics and nested closure scopes. By-reference captures (`use (&$x)`) are rejected rather than silently changed. Captured arrays are subject to the same `maxDepth` policy and must not contain references.
+
+### `ClosureUseMode::Inline`
+
+```php
+$config = new ExportConfig(closureUseMode: ClosureUseMode::Inline);
+```
+
+Use this mode for self-contained cache artifacts. By-reference captures remain unsupported.
+
+## Closure namespaces and class scope
+
+The source cache indexes closures by source line and namespace. Generated code freezes source namespace resolution for unqualified function/constant calls at export time, fully qualifies class references, and substitutes magic constants with their source values.
+
+Static/class-scoped closures can be preserved when their lexical and called class are the same. The generated expression restores the class scope using `Closure::bind()`. This allows `self::`, `parent::`, private/protected access, and source magic constants to retain their intended semantics.
+
+Closures bound to an object (`$this`) and late-static-binding cases where lexical/called class differ are rejected because exact reconstruction is not guaranteed.
+
+## Readonly value objects
+
+A readonly object is supported only when its state is provably reconstructable:
+
+```php
+enum Priority: string
+{
+    case Low = 'low';
+    case High = 'high';
+}
+
+final readonly class Task
+{
+    public function __construct(
+        public string $title,
+        public Priority $priority,
+        public array $tags,
+    ) {
+    }
+}
+
+$code = Export::var(new Task('Ship', Priority::High, ['core']));
+```
+
+The constructor must be public. Parameters must not be variadic or by-reference and must be promoted public properties. Virtual/hooked properties and extra instance state are rejected. `ObjectExporter::supports()` performs an exact preflight for the current instance by attempting the non-executing source export and returns `false` on any unsupported state.
+
+## Reusing exporters and source cache
 
 ```php
 use Componenta\VarExport\VarExporter;
 
 $exporter = new VarExporter(ExportConfig::pretty());
-$a = $exporter->export($closure1);
-$b = $exporter->export($closure2);  // closure1's file AST is cached
+$a = $exporter->export($closureA);
+$b = $exporter->export($closureB);
 ```
 
----
+Closure source is cached by canonical path plus a SHA-256 content fingerprint. The cache stores a closure index instead of repeatedly scanning a full AST. Returned AST candidates are deep detached copies, so export transformations cannot mutate cached state.
 
-## Closure capture modes
+Advanced callers can supply `ClosureSourceCacheInterface`; the default implementation is `Source\ClosureSourceCache`.
 
-### `ClosureUseMode::Preserve` (default)
+## Errors
 
-Keeps the `use(...)` clause verbatim. The captured variables must exist in the scope where the exported code runs.
-
-```php
-$multiplier = 2;
-$fn = function (int $x) use ($multiplier): int {
-    return $x * $multiplier;
-};
-
-Export::closure($fn);
-// → function (int $x) use ($multiplier): int { return $x * $multiplier; }
-```
-
-### `ClosureUseMode::Inline`
-
-Replaces each `use(...)` variable with its current value, yielding a self-contained closure:
+All library exceptions implement `Componenta\VarExport\Contract\ExceptionInterface`.
 
 ```php
-$config = new ExportConfig(closureUseMode: ClosureUseMode::Inline);
+use Componenta\VarExport\Contract\ExceptionInterface;
 
-Export::closure($fn, $config);
-// → function (int $x): int { return $x * 2; }
-```
-
-Inline mode accepts scalar captures and nested scalar arrays. Captures of objects, resources, nested closures or by-reference variables (`use (&$x)`) are rejected with `ClosureExportException`.
-
----
-
-## Exporting objects
-
-```php
-enum Priority: string {
-    case Low = 'low';
-    case High = 'high';
+try {
+    $code = Export::var($value);
+} catch (ExceptionInterface $e) {
+    // Typed library failure.
 }
-
-final readonly class Task {
-    public function __construct(
-        public string $title,
-        public Priority $priority,
-        public array $tags,
-    ) {}
-}
-
-Export::var(new Task('Ship', Priority::High, ['core']));
-// → new \App\Task('Ship', \App\Priority::High, ['core'])
 ```
 
-Requirements for readonly-class export:
-
-- Class is marked `readonly`
-- Every constructor parameter has a matching `public` property
-
-`ObjectExporter::supports($object)` reports up front whether a given object satisfies these rules — use it to pre-flight untrusted input.
-
----
+Specific exception classes remain available for array, closure, configuration, and general export failures. Internal parser/reflection failures are normalized at public exporter boundaries and retained as `previous` exceptions where applicable.
 
 ## Helper functions
 
-For callers that prefer free functions over static methods:
-
 ```php
-use function Componenta\VarExport\var_export_string;
-use function Componenta\VarExport\var_export_pretty;
 use function Componenta\VarExport\array_export;
 use function Componenta\VarExport\closure_export;
-
-var_export_string($value);
-var_export_string($value, pretty: true);
-var_export_pretty($value);
-array_export([1, 2, 3]);
-closure_export(fn() => 42);
+use function Componenta\VarExport\var_export_pretty;
+use function Componenta\VarExport\var_export_string;
 ```
 
----
+The functions delegate to the stable `Export` facade.
 
-## Error handling
+## Quality gates
 
-```php
-use Componenta\VarExport\Exception\{
-    ExportException,
-    ArrayExportException,
-    ClosureExportException,
-    ConfigurationException,
-};
+`composer check` runs formatting verification, PHPStan, and the complete Pest test suite, including regression tests. `composer mutation` runs Pest mutation testing with a 70% covered-code mutation-score gate. GitHub Actions exercises PHP 8.4/8.5 with lowest/current dependencies and runs the mutation gate on PHP 8.5.
 
-try {
-    $code = Export::var($data);
-} catch (ArrayExportException $e) {
-    // Max depth, unexportable element, key path context in $e->context
-} catch (ClosureExportException $e) {
-    // Bound $this, inline captures not supported, ambiguous location
-} catch (ConfigurationException $e) {
-    // Invalid indent / maxDepth in ExportConfig
-} catch (ExportException $e) {
-    // Unsupported top-level type
-}
+```bash
+composer test
+composer mutation
+composer phpstan
+composer cs-check
+composer check
 ```
 
-Every exception carries a `$context` array with metadata (class, key path, variable names, file/line) — values that caused the failure are **not** stored, so logs stay safe.
+## Related packages
 
----
-
-## Not supported
-
-- Mutable objects (non-readonly, or with private state that cannot be reconstructed through the constructor)
-- Resources (including stream/curl handles)
-- Closures bound to `$this` — convert to `static function() { ... }` before export
-- Closures defined in `eval()`'d code (no source file to parse)
-- Two or more closures on the same line with identical signatures (ambiguous — keep them on separate lines)
-
----
+- `componenta/config` uses VarExport for executable configuration cache artifacts.
+- `componenta/app` and `componenta/di` can use the same deterministic PHP-expression representation for compiled metadata.
 
 ## License
 

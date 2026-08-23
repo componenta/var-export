@@ -8,74 +8,45 @@ use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
+use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
+use Componenta\VarExport\Contract\VarExporterInterface;
 use Componenta\VarExport\Exception\ExportException;
-use Componenta\VarExport\Internal\AstCache;
 use Componenta\VarExport\Internal\ValueFormatter;
+use Componenta\VarExport\Source\ClosureSourceCache;
 
-/**
- * Exports PHP variables to their string representation.
- *
- * This is the main exporter class. For repeated exports with the same
- * configuration, reuse the instance to benefit from AST caching.
- *
- * Example:
- * ```php
- * $exporter = new VarExporter(ExportConfig::pretty());
- * $code = $exporter->export($array);
- * ```
- *
- * For one-off exports, use the static Export facade instead.
- *
- * @see Export
- */
-final readonly class VarExporter
+final readonly class VarExporter implements VarExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
     private ArrayExporterInterface $arrayExporter;
     private ClosureExporterInterface $closureExporter;
-    private ?ObjectExporterInterface $objectExporter;
-    private AstCache $astCache;
+    private ObjectExporterInterface $objectExporter;
+    private ClosureSourceCacheInterface $sourceCache;
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?AstCache $astCache = null,
+        ?ClosureSourceCacheInterface $astCache = null,
         ?ObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
+        ?ClosureExporterInterface $closureExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
-        $this->astCache = $astCache ?? new AstCache();
-        $this->closureExporter = new ClosureExporter($config, $this->astCache);
-
-        // When no object exporter is supplied we default to our own and
-        // wire a lazy provider so nested arrays inside readonly objects
-        // reuse the main ArrayExporter (pretty/sortKeys/trailingComma
-        // remain consistent with the outer structure). The provider
-        // captures `$this`; at call time `$this->arrayExporter` is
-        // already assigned below.
-        if ($objectExporter === null) {
-            $objectExporter = new ObjectExporter(
-                $config,
-                $this->valueFormatter,
-                fn(): ArrayExporterInterface => $this->arrayExporter,
-            );
-        }
-
-        $this->objectExporter = $objectExporter;
+        $this->sourceCache = $astCache ?? new ClosureSourceCache();
+        $this->closureExporter = $closureExporter ?? new ClosureExporter($config, $this->sourceCache);
+        $this->objectExporter = $objectExporter ?? new ObjectExporter(
+            $config,
+            $this->valueFormatter,
+            closureExporter: $this->closureExporter,
+        );
         $this->arrayExporter = new ArrayExporter(
             $config,
             $this->closureExporter,
-            $objectExporter,
+            $this->objectExporter,
             $this->valueFormatter,
         );
     }
 
-    /**
-     * Export any variable to its string representation.
-     *
-     * @throws ExportException If the variable cannot be exported
-     */
     public function export(mixed $var): string
     {
         return match (true) {
@@ -85,52 +56,45 @@ final readonly class VarExporter
             is_string($var) => $this->valueFormatter->escapeString($var),
             is_array($var) => $this->arrayExporter->export($var),
             $var instanceof Closure => $this->closureExporter->export($var),
-            is_object($var) && $this->objectExporter?->supports($var) => $this->objectExporter->export($var),
-            is_object($var) => throw ExportException::unexportableObject($var),
+            is_object($var) => $this->objectExporter->export($var),
             is_resource($var) => throw ExportException::resourceNotExportable($var),
             default => throw ExportException::unsupportedType($var),
         };
     }
 
-    /**
-     * Export with trailing semicolon (for file output).
-     *
-     * @throws ExportException If the variable cannot be exported
-     */
     public function exportToFile(mixed $var): string
     {
         return $this->export($var) . ';';
     }
 
-    /**
-     * Create a new exporter with different configuration.
-     */
-    public function withConfig(ExportConfig $config): self
+    public function withConfig(ExportConfig $config): static
     {
-        return new self($config, $this->astCache, $this->objectExporter);
+        return new self(
+            $config,
+            $this->sourceCache,
+            $this->objectExporter->withConfig($config),
+            $this->valueFormatter,
+            $this->closureExporter->withConfig($config),
+        );
     }
 
-    /**
-     * Get current configuration.
-     */
     public function getConfig(): ExportConfig
     {
         return $this->config;
     }
 
-    /**
-     * Get the array exporter instance.
-     */
     public function getArrayExporter(): ArrayExporterInterface
     {
         return $this->arrayExporter;
     }
 
-    /**
-     * Get the closure exporter instance.
-     */
     public function getClosureExporter(): ClosureExporterInterface
     {
         return $this->closureExporter;
+    }
+
+    public function getObjectExporter(): ObjectExporterInterface
+    {
+        return $this->objectExporter;
     }
 }

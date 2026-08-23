@@ -8,46 +8,57 @@ use Closure;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
+use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
-use Componenta\VarExport\Internal\AstCache;
 use Componenta\VarExport\Internal\ClosureValidator;
 use Componenta\VarExport\Internal\MagicConstantResolver;
+use Componenta\VarExport\Internal\SourceSymbolResolver;
 use Componenta\VarExport\Internal\UseVariableInliner;
+use Componenta\VarExport\Source\ClosureSourceCache;
+use Componenta\VarExport\Source\ClosureSourceCandidate;
+use PhpParser\ConstExprEvaluationException;
+use PhpParser\ConstExprEvaluator;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
-use PhpParser\Node\Stmt\Namespace_;
-use PhpParser\NodeFinder;
+use PhpParser\Node\Expr\ConstFetch;
+use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Identifier;
+use PhpParser\Node\Name;
+use PhpParser\Node\NullableType;
+use PhpParser\Node\UnionType as NodeUnionType;
+use PhpParser\Node\IntersectionType as NodeIntersectionType;
+use PhpParser\Node\Name\FullyQualified;
 use PhpParser\NodeTraverser;
+use PhpParser\PhpVersion;
 use PhpParser\PrettyPrinter\Standard as PrettyPrinter;
 use ReflectionFunction;
+use ReflectionIntersectionType;
+use ReflectionNamedType;
+use ReflectionParameter;
+use ReflectionType;
+use ReflectionUnionType;
+use Throwable;
 
-/**
- * Exports PHP closures to their string representation.
- *
- * Uses PHP-Parser for AST analysis to accurately export closure source code
- * with proper namespace resolution and optional use() variable inlining.
- */
 final readonly class ClosureExporter implements ClosureExporterInterface
 {
     private ClosureValidator $validator;
     private UseVariableInliner $inliner;
-    private NodeFinder $nodeFinder;
     private PrettyPrinter $printer;
-    private AstCache $astCache;
+    private ClosureSourceCacheInterface $sourceCache;
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?AstCache $astCache = null,
+        ?ClosureSourceCacheInterface $astCache = null,
     ) {
         $this->validator = new ClosureValidator();
         $this->inliner = new UseVariableInliner();
-        $this->nodeFinder = new NodeFinder();
-        // Match the printer's own body indentation to the configured indent
-        // so internal statement nesting looks consistent with the rest of
-        // the exported output (tabs vs spaces, width, etc.).
-        $this->printer = new PrettyPrinter(['indent' => $this->config->indent]);
-        $this->astCache = $astCache ?? new AstCache();
+        $this->sourceCache = $astCache ?? new ClosureSourceCache();
+        $this->printer = new PrettyPrinter([
+            'indent' => $this->config->indent,
+            'phpVersion' => PhpVersion::getHostVersion(),
+        ]);
     }
 
     public function export(Closure $closure): string
@@ -57,134 +68,374 @@ final readonly class ClosureExporter implements ClosureExporterInterface
 
     public function exportWithDepth(Closure $closure, int $depth): string
     {
-        $reflection = $this->validator->validate($closure, $this->config->closureUseMode);
-        $node = $this->extractClosureNode($reflection);
-        $node = $this->applyMagicConstants($node, $reflection);
-
-        if ($this->config->closureUseMode === ClosureUseMode::Inline) {
-            $this->assertNoByRefUseInInlineMode($node, $reflection);
-            $variables = $reflection->getClosureUsedVariables();
-            $node = $this->inliner->inline($node, $variables);
+        if ($depth < 0) {
+            throw new ClosureExportException(
+                sprintf('Depth must be non-negative; got %d.', $depth),
+                ['depth' => $depth],
+            );
         }
 
-        $code = $this->printer->prettyPrintExpr($node);
+        $reflection = $this->validator->validate($closure);
 
-        return $this->config->isPretty()
-            ? $this->formatPretty($code, $depth)
-            : $this->formatCompact($code);
+        try {
+            $candidate = $this->selectCandidate($reflection);
+            $node = $candidate->node;
+
+            $this->resolveMagicConstants($node, $candidate, $reflection);
+            $this->resolveSourceSymbols($node);
+
+            if ($this->config->closureUseMode === ClosureUseMode::Inline) {
+                $this->assertNoByReferenceCapture($node, $reflection);
+                $node = $this->inliner->inline(
+                    $node,
+                    $reflection->getClosureUsedVariables(),
+                    $this->config->maxDepth,
+                    $reflection->getFileName() ?: null,
+                    $reflection->getStartLine() ?: null,
+                );
+            }
+
+            $node = $this->restoreClassScope($node, $reflection);
+            $code = $this->printer->prettyPrintExpr($node);
+
+            return $this->config->isPretty()
+                ? $this->formatPretty($code, $depth)
+                : $this->formatCompact($code);
+        } catch (ClosureExportException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            throw ClosureExportException::internalFailure($reflection, $e);
+        }
     }
 
     public function withConfig(ExportConfig $config): static
     {
-        return new self($config, $this->astCache);
+        return new self($config, $this->sourceCache);
     }
 
-    /**
-     * Extract the closure AST node from source file.
-     *
-     * @throws ClosureExportException
-     */
-    private function extractClosureNode(ReflectionFunction $reflection): ClosureNode|ArrowFunction
+    private function selectCandidate(ReflectionFunction $reflection): ClosureSourceCandidate
     {
         $filename = $reflection->getFileName();
-        $line = $reflection->getStartLine();
-        $endLine = $reflection->getEndLine();
-        $paramCount = $reflection->getNumberOfParameters();
+        $startLine = $reflection->getStartLine();
 
-        $ast = $this->astCache->getAst($filename);
-        $closures = $this->findClosuresOnLine($ast, $line);
-
-        if ($closures === []) {
-            throw ClosureExportException::nodeNotFound($line, $filename);
+        if ($filename === false || $startLine === false) {
+            throw ClosureExportException::sourceNotFound($filename ?: 'unknown');
         }
 
-        $originalCount = count($closures);
+        $candidates = $this->sourceCache->candidates($filename, $startLine);
+        if ($candidates === []) {
+            throw ClosureExportException::nodeNotFound($startLine, $filename);
+        }
 
-        if ($originalCount > 1) {
-            // Narrow by end line first, then by parameter count. Two closures
-            // with identical start line, end line AND arity on the same line
-            // are genuinely ambiguous - give up and ask the caller to split
-            // them onto separate lines.
-            $closures = $this->narrow($closures, static fn($n) => $n->getEndLine() === $endLine);
+        $matches = array_values(array_filter(
+            $candidates,
+            fn(ClosureSourceCandidate $candidate): bool => $this->matchesReflection($candidate->node, $reflection),
+        ));
 
-            if (count($closures) > 1) {
-                $closures = $this->narrow(
-                    $closures,
-                    static fn($n) => count($n->getParams()) === $paramCount,
-                );
+        if ($matches === []) {
+            throw ClosureExportException::staleSource($reflection);
+        }
+
+        if (count($matches) !== 1) {
+            throw ClosureExportException::ambiguousLocation($startLine, count($matches), $filename);
+        }
+
+        return $matches[0];
+    }
+
+    private function matchesReflection(ClosureNode|ArrowFunction $node, ReflectionFunction $reflection): bool
+    {
+        if ($node->getEndLine() !== $reflection->getEndLine()) {
+            return false;
+        }
+
+        if ((bool) $node->static !== $reflection->isStatic()) {
+            return false;
+        }
+
+        if ((bool) $node->byRef !== $reflection->returnsReference()) {
+            return false;
+        }
+
+        $parameters = $reflection->getParameters();
+        if (count($node->params) !== count($parameters)) {
+            return false;
+        }
+
+        foreach ($parameters as $index => $parameter) {
+            $nodeParameter = $node->params[$index];
+            if (!is_string($nodeParameter->var->name) || $nodeParameter->var->name !== $parameter->getName()) {
+                return false;
             }
 
-            if (count($closures) !== 1) {
-                throw ClosureExportException::ambiguousLocation($line, $originalCount, $filename);
+            if ($nodeParameter->byRef !== $parameter->isPassedByReference()) {
+                return false;
+            }
+
+            if ($nodeParameter->variadic !== $parameter->isVariadic()) {
+                return false;
+            }
+
+            if (!$this->typesMatch($nodeParameter->type, $parameter->getType())) {
+                return false;
+            }
+
+            if (($nodeParameter->default !== null) !== $parameter->isDefaultValueAvailable()) {
+                return false;
+            }
+
+            if ($nodeParameter->default !== null && !$this->defaultMatches($nodeParameter->default, $parameter)) {
+                return false;
             }
         }
 
-        return reset($closures);
+        if (!$this->typesMatch($node->returnType, $reflection->getReturnType())) {
+            return false;
+        }
+
+        if ($node instanceof ClosureNode) {
+            $useNames = [];
+            foreach ($node->uses as $use) {
+                if (is_string($use->var->name)) {
+                    $useNames[] = $use->var->name;
+                }
+            }
+
+            if ($useNames !== array_keys($reflection->getClosureUsedVariables())) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
-    /**
-     * @param array<ClosureNode|ArrowFunction> $candidates
-     * @return array<ClosureNode|ArrowFunction>
-     */
-    private function narrow(array $candidates, callable $predicate): array
+    private function typesMatch(?Node $nodeType, ?ReflectionType $reflectionType): bool
     {
-        $filtered = array_values(array_filter($candidates, $predicate));
-
-        // If the predicate eliminates everything it was unreliable for this
-        // call (e.g. end-line metadata missing) - keep the previous set so
-        // the next predicate still has something to work with.
-        return $filtered === [] ? $candidates : $filtered;
+        return $this->nodeTypeDescriptor($nodeType) === $this->reflectionTypeDescriptor($reflectionType);
     }
 
-    /**
-     * Find all closure/arrow function nodes starting on a specific line.
-     *
-     * @param array<Node> $ast
-     * @return array<ClosureNode|ArrowFunction>
-     */
-    private function findClosuresOnLine(array $ast, int $line): array
+    private function nodeTypeDescriptor(?Node $type): string
     {
-        return $this->nodeFinder->find(
-            $ast,
-            static fn(Node $node) => ($node instanceof ClosureNode || $node instanceof ArrowFunction)
-                && $node->getStartLine() === $line,
-        );
+        if ($type === null) {
+            return '';
+        }
+
+        if ($type instanceof NullableType) {
+            return self::compositeTypeDescriptor('union', [
+                $this->nodeTypeDescriptor($type->type),
+                'named:null',
+            ]);
+        }
+
+        if ($type instanceof NodeUnionType) {
+            return self::compositeTypeDescriptor(
+                'union',
+                array_map(fn(Node $member): string => $this->nodeTypeDescriptor($member), $type->types),
+            );
+        }
+
+        if ($type instanceof NodeIntersectionType) {
+            return self::compositeTypeDescriptor(
+                'intersection',
+                array_map(fn(Node $member): string => $this->nodeTypeDescriptor($member), $type->types),
+            );
+        }
+
+        if ($type instanceof Identifier || $type instanceof Name) {
+            return 'named:' . strtolower(ltrim($type->toString(), '\\'));
+        }
+
+        return 'node:' . $type->getType();
     }
 
-    /**
-     * Substitute file-level magic constants so the closure is self-contained.
-     */
-    private function applyMagicConstants(
+    private function reflectionTypeDescriptor(?ReflectionType $type): string
+    {
+        if ($type === null) {
+            return '';
+        }
+
+        if ($type instanceof ReflectionNamedType) {
+            $descriptor = 'named:' . strtolower(ltrim($type->getName(), '\\'));
+            if ($type->allowsNull() && strtolower($type->getName()) !== 'null' && strtolower($type->getName()) !== 'mixed') {
+                return self::compositeTypeDescriptor('union', [$descriptor, 'named:null']);
+            }
+
+            return $descriptor;
+        }
+
+        if ($type instanceof ReflectionUnionType) {
+            return self::compositeTypeDescriptor(
+                'union',
+                array_map(fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member), $type->getTypes()),
+            );
+        }
+
+        if ($type instanceof ReflectionIntersectionType) {
+            return self::compositeTypeDescriptor(
+                'intersection',
+                array_map(fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member), $type->getTypes()),
+            );
+        }
+
+        return 'reflection:' . (string) $type;
+    }
+
+    /** @param list<string> $members */
+    private static function compositeTypeDescriptor(string $kind, array $members): string
+    {
+        sort($members, SORT_STRING);
+
+        return $kind . ':(' . implode(',', $members) . ')';
+    }
+
+    private function defaultMatches(Node\Expr $nodeDefault, ReflectionParameter $parameter): bool
+    {
+        if ($parameter->isDefaultValueConstant()) {
+            $expected = $parameter->getDefaultValueConstantName();
+            if ($expected === null) {
+                return false;
+            }
+
+            return in_array(
+                self::normalizeConstantName($expected),
+                array_map(self::normalizeConstantName(...), $this->defaultConstantNames($nodeDefault)),
+                true,
+            );
+        }
+
+        try {
+            $actual = (new ConstExprEvaluator())->evaluateSilently($nodeDefault);
+        } catch (ConstExprEvaluationException) {
+            // Some legal PHP defaults (for example `new Foo()`) need runtime
+            // context. Reflection cannot expose enough source metadata for an
+            // exact comparison, so other signature dimensions remain the
+            // stale-source guard for those expressions.
+            return true;
+        }
+
+        return self::sameValue($actual, $parameter->getDefaultValue());
+    }
+
+    /** @return list<string> */
+    private function defaultConstantNames(Node\Expr $expression): array
+    {
+        if ($expression instanceof ConstFetch) {
+            $names = [$expression->name->toString()];
+            $namespaced = $expression->name->getAttribute('namespacedName');
+            if ($namespaced instanceof Name) {
+                $names[] = $namespaced->toString();
+            }
+
+            return array_values(array_unique($names));
+        }
+
+        if ($expression instanceof ClassConstFetch && $expression->class instanceof Name && $expression->name instanceof Identifier) {
+            return [$expression->class->toString() . '::' . $expression->name->toString()];
+        }
+
+        return [$this->printer->prettyPrintExpr($expression)];
+    }
+
+    private static function normalizeConstantName(string $name): string
+    {
+        return ltrim($name, '\\');
+    }
+
+    private static function sameValue(mixed $left, mixed $right): bool
+    {
+        if (is_float($left) && is_float($right)) {
+            if (is_nan($left) || is_nan($right)) {
+                return is_nan($left) && is_nan($right);
+            }
+
+            return pack('d', $left) === pack('d', $right);
+        }
+
+        if (is_array($left) && is_array($right)) {
+            if (array_keys($left) !== array_keys($right)) {
+                return false;
+            }
+
+            foreach ($left as $key => $value) {
+                if (!self::sameValue($value, $right[$key])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return $left === $right;
+    }
+
+    private function resolveMagicConstants(
+        ClosureNode|ArrowFunction $node,
+        ClosureSourceCandidate $candidate,
+        ReflectionFunction $reflection,
+    ): void {
+        $scope = $reflection->getClosureScopeClass();
+        $traverser = new NodeTraverser(new MagicConstantResolver(
+            $reflection->getFileName() ?: '',
+            $candidate->namespace,
+            $reflection->getName(),
+            $scope?->getName() ?? '',
+            $candidate->trait,
+        ));
+        $traverser->traverse([$node]);
+    }
+
+    private function resolveSourceSymbols(ClosureNode|ArrowFunction $node): void
+    {
+        (new NodeTraverser(new SourceSymbolResolver()))->traverse([$node]);
+    }
+
+    private function assertNoByReferenceCapture(
         ClosureNode|ArrowFunction $node,
         ReflectionFunction $reflection,
-    ): ClosureNode|ArrowFunction {
-        $filename = $reflection->getFileName();
-        $namespace = $this->nodeFinder->findFirstInstanceOf(
-            $this->astCache->getAst($filename),
-            Namespace_::class,
-        );
+    ): void {
+        if (!$node instanceof ClosureNode) {
+            return;
+        }
 
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor(new MagicConstantResolver($namespace, $filename));
+        $invalid = [];
+        foreach ($node->uses as $use) {
+            if ($use->byRef && is_string($use->var->name)) {
+                $invalid[$use->var->name] = 'captured by reference';
+            }
+        }
 
-        /** @var array<ClosureNode|ArrowFunction> $result */
-        $result = $traverser->traverse([$node]);
-
-        return $result[0];
+        if ($invalid !== []) {
+            throw ClosureExportException::cannotInlineUseVariables(
+                $invalid,
+                $reflection->getFileName() ?: null,
+                $reflection->getStartLine() ?: null,
+            );
+        }
     }
 
-    /**
-     * Collapse whitespace between tokens without touching string/heredoc contents.
-     *
-     * A naive regex over the printer output would corrupt literal whitespace
-     * inside quoted strings; tokenising the output guarantees we only rewrite
-     * whitespace that is actually code formatting.
-     */
+    private function restoreClassScope(Node\Expr $node, ReflectionFunction $reflection): Node\Expr
+    {
+        $scope = $reflection->getClosureScopeClass();
+        if ($scope === null) {
+            return $node;
+        }
+
+        return new StaticCall(
+            new FullyQualified(Closure::class),
+            new Identifier('bind'),
+            [
+                new Node\Arg($node),
+                new Node\Arg(new ConstFetch(new FullyQualified('null'))),
+                new Node\Arg(new ClassConstFetch(new FullyQualified($scope->getName()), new Identifier('class'))),
+            ],
+        );
+    }
+
     private function formatCompact(string $code): string
     {
         $tokens = \PhpToken::tokenize('<?php ' . $code);
         $result = '';
-        $previousWasSpace = true;
+        $pendingSpace = false;
 
         foreach ($tokens as $index => $token) {
             if ($index === 0 && $token->is(T_OPEN_TAG)) {
@@ -192,50 +443,28 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             }
 
             if ($token->is([T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
-                if (!$previousWasSpace) {
-                    $result .= ' ';
-                    $previousWasSpace = true;
-                }
+                $pendingSpace = $result !== '';
                 continue;
             }
 
+            if ($pendingSpace) {
+                $result .= ' ';
+                $pendingSpace = false;
+            }
+
             $result .= $token->text;
-            $previousWasSpace = false;
         }
 
         return trim($result);
     }
 
-    /**
-     * Prepend base indent to every code-level newline in the printer output.
-     *
-     * The PrettyPrinter already emits body statements indented relative to
-     * column 0. What we need to add is the caller's nesting level - one
-     * copy of the configured indent per depth, inserted after every newline
-     * that belongs to code formatting (not to a literal newline inside a
-     * string or heredoc).
-     *
-     * A naive `str_replace("\n", "\n" . $baseIndent, $code)` would also
-     * indent the inside of a heredoc body, silently corrupting literal
-     * whitespace in user data. Tokenising the output lets us tell those
-     * newlines apart: the bytes that live inside a string-like token are
-     * pass-through, everything else gets the base indent prepended to
-     * every newline.
-     */
     private function formatPretty(string $code, int $depth): string
     {
-        // Arrow functions and single-line closures need no re-indent -
-        // the caller will prepend whatever item indent it chose.
-        if (!str_contains($code, "\n")) {
+        if ($depth === 0 || !str_contains($code, "\n")) {
             return $code;
         }
 
         $baseIndent = str_repeat($this->config->indent, $depth);
-
-        if ($baseIndent === '') {
-            return $code;
-        }
-
         $tokens = \PhpToken::tokenize('<?php ' . $code);
         $result = '';
 
@@ -255,46 +484,6 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         return $result;
     }
 
-    /**
-     * Reject inlining when the closure captures any variable by reference.
-     *
-     * Inlining replaces the captured variable with a literal value node,
-     * which silently strips the reference semantics: mutations inside the
-     * closure would stop propagating back to the caller, turning a
-     * functional closure into one that looks right but behaves wrong.
-     * Better to fail loudly than to ship a subtly-broken closure.
-     *
-     * Arrow functions have no explicit use clause, so they are never
-     * affected by this check.
-     */
-    private function assertNoByRefUseInInlineMode(
-        ClosureNode|ArrowFunction $node,
-        ReflectionFunction $reflection,
-    ): void {
-        if (!$node instanceof ClosureNode) {
-            return;
-        }
-
-        $byRefVars = [];
-        foreach ($node->uses as $use) {
-            if ($use->byRef && is_string($use->var->name)) {
-                $byRefVars[$use->var->name] = 'captured by reference';
-            }
-        }
-
-        if ($byRefVars !== []) {
-            throw ClosureExportException::cannotInlineUseVariables(
-                $byRefVars,
-                $reflection->getFileName() ?: null,
-                $reflection->getStartLine() ?: null,
-            );
-        }
-    }
-
-    /**
-     * Tokens whose text is user-facing string data - their internal
-     * newlines belong to the literal value and must not be re-indented.
-     */
     private function isStringLiteralToken(\PhpToken $token): bool
     {
         return $token->is([

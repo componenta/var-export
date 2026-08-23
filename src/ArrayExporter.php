@@ -12,13 +12,8 @@ use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Exception\ArrayExportException;
 use Componenta\VarExport\Internal\ValueFormatter;
+use Throwable;
 
-/**
- * Exports PHP arrays to their string representation.
- *
- * Supports both compact and pretty-printed output with configurable
- * indentation, key sorting, and trailing commas.
- */
 final readonly class ArrayExporter implements ArrayExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
@@ -32,35 +27,44 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
     }
 
+    /** @param array<mixed> $array */
     public function export(array $array): string
     {
         return $this->formatArray($array, 0, [], '');
     }
 
+    /** @param array<mixed> $array */
     public function exportAtDepth(array $array, int $depth, string $baseIndent): string
     {
+        if ($depth < 0) {
+            throw ArrayExportException::invalidDepth($depth);
+        }
+
         return $this->formatArray($array, $depth, [], $baseIndent);
     }
 
     public function withConfig(ExportConfig $config): static
     {
-        return new self($config, $this->closureExporter, $this->objectExporter, $this->valueFormatter);
+        return new self(
+            $config,
+            $this->closureExporter?->withConfig($config),
+            $this->objectExporter?->withConfig($config),
+            $this->valueFormatter,
+        );
     }
 
     /**
-     * Export array with trailing semicolon for file output.
+     * @deprecated Use VarExporter::exportToFile() or Export::toFile().
      */
+    /** @param array<mixed> $array */
     public function exportWithSemicolon(array $array): string
     {
         return $this->export($array) . ';';
     }
 
     /**
-     * Format array recursively with depth tracking.
-     *
-     * @param array<int|string> $keyPath Path of keys to current position
-     * @param string $baseIndent Indentation prefix for the closing bracket
-     * @throws ArrayExportException
+     * @param array<mixed> $array
+     * @param array<int|string> $keyPath
      */
     private function formatArray(array $array, int $depth, array $keyPath, string $baseIndent): string
     {
@@ -72,72 +76,59 @@ final readonly class ArrayExporter implements ArrayExporterInterface
             return '[]';
         }
 
-        $isSequential = array_is_list($array);
-        $keys = $this->getOrderedKeys($array, $isSequential);
+        $isList = array_is_list($array);
+        $keys = $this->orderedKeys($array);
 
         return $this->config->isPretty()
-            ? $this->formatPretty($array, $keys, $isSequential, $depth, $keyPath, $baseIndent)
-            : $this->formatCompact($array, $keys, $isSequential, $depth, $keyPath, $baseIndent);
+            ? $this->formatPretty($array, $keys, $isList, $depth, $keyPath, $baseIndent)
+            : $this->formatCompact($array, $keys, $isList, $depth, $keyPath, $baseIndent);
     }
 
     /**
-     * Format array in compact single-line style.
-     *
+     * @param array<int|string> $keys
      * @param array<int|string> $keyPath
      */
     private function formatCompact(
         array $array,
         array $keys,
-        bool $isSequential,
+        bool $isList,
         int $depth,
         array $keyPath,
         string $baseIndent,
     ): string {
         $items = [];
-        $childBaseIndent = $baseIndent . $this->config->indent;
+        $childIndent = $baseIndent . $this->config->indent;
 
         foreach ($keys as $key) {
-            $currentPath = [...$keyPath, $key];
-            $value = $this->formatValue($array[$key], $depth + 1, $key, $currentPath, $childBaseIndent);
-
-            if ($isSequential) {
-                $items[] = $value;
-            } else {
-                $formattedKey = $this->formatKey($key);
-                $items[] = "{$formattedKey} => {$value}";
-            }
+            $path = [...$keyPath, $key];
+            $this->assertNotReference($array, $key, $path);
+            $value = $this->formatValue($array[$key], $depth + 1, $key, $path, $childIndent);
+            $items[] = $isList ? $value : $this->formatKey($key) . ' => ' . $value;
         }
 
         return '[' . implode(', ', $items) . ']';
     }
 
     /**
-     * Format array in pretty multi-line style.
-     *
+     * @param array<int|string> $keys
      * @param array<int|string> $keyPath
      */
     private function formatPretty(
         array $array,
         array $keys,
-        bool $isSequential,
+        bool $isList,
         int $depth,
         array $keyPath,
         string $baseIndent,
     ): string {
         $itemIndent = $baseIndent . $this->config->indent;
-
         $items = [];
 
         foreach ($keys as $key) {
-            $currentPath = [...$keyPath, $key];
-            $value = $this->formatValue($array[$key], $depth + 1, $key, $currentPath, $itemIndent);
-
-            if ($isSequential) {
-                $items[] = $itemIndent . $value;
-            } else {
-                $formattedKey = $this->formatKey($key);
-                $items[] = $itemIndent . "{$formattedKey} => {$value}";
-            }
+            $path = [...$keyPath, $key];
+            $this->assertNotReference($array, $key, $path);
+            $value = $this->formatValue($array[$key], $depth + 1, $key, $path, $itemIndent);
+            $items[] = $itemIndent . ($isList ? $value : $this->formatKey($key) . ' => ' . $value);
         }
 
         $trailing = $this->config->trailingComma ? ',' : '';
@@ -146,12 +137,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
     }
 
     /**
-     * Format a single value.
-     *
-     * @param int|string $key Current array key
-     * @param array<int|string> $keyPath Full path to this value
-     * @param string $baseIndent Base indent at this nesting level (for pretty mode)
-     * @throws ArrayExportException
+     * @param array<int|string> $keyPath
      */
     private function formatValue(
         mixed $value,
@@ -166,14 +152,8 @@ final readonly class ArrayExporter implements ArrayExporterInterface
             is_int($value), is_float($value) => $this->valueFormatter->formatNumeric($value),
             is_string($value) => $this->valueFormatter->escapeString($value),
             is_array($value) => $this->formatArray($value, $depth, $keyPath, $baseIndent),
-            $value instanceof Closure => $this->formatClosure($value, $depth),
-            is_object($value) && $this->objectExporter?->supports($value) => $this->objectExporter->exportWithDepth($value, $depth),
-            is_object($value) => throw ArrayExportException::unexportableElement(
-                $key,
-                $value::class,
-                $depth,
-                $keyPath,
-            ),
+            $value instanceof Closure => $this->formatClosure($value, $depth, $key, $keyPath),
+            is_object($value) => $this->formatObject($value, $depth, $key, $keyPath),
             is_resource($value) => throw ArrayExportException::unexportableElement(
                 $key,
                 'resource (' . get_resource_type($value) . ')',
@@ -189,78 +169,75 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         };
     }
 
-    /**
-     * Format a closure value.
-     */
-    private function formatClosure(Closure $closure, int $depth): string
+    /** @param array<int|string> $keyPath */
+    private function formatClosure(Closure $closure, int $depth, int|string $key, array $keyPath): string
     {
         if ($this->closureExporter === null) {
-            return $this->createClosurePlaceholder($closure);
+            throw ArrayExportException::closureExporterMissing($key, $depth, $keyPath);
         }
 
         return $this->closureExporter->exportWithDepth($closure, $depth);
     }
 
-    /**
-     * Create a placeholder comment for closures when no exporter is available.
-     */
-    private function createClosurePlaceholder(Closure $closure): string
+    /** @param array<int|string> $keyPath */
+    private function formatObject(object $object, int $depth, int|string $key, array $keyPath): string
     {
-        try {
-            $reflection = new \ReflectionFunction($closure);
-            $params = array_map(
-                fn($p) => '$' . $p->getName(),
-                $reflection->getParameters(),
-            );
+        if ($this->objectExporter === null) {
+            throw ArrayExportException::unexportableElement($key, $object::class, $depth, $keyPath);
+        }
 
-            return sprintf('function(%s) { /* closure */ }', implode(', ', $params));
-        } catch (\Throwable) {
-            return 'function() { /* closure */ }';
+        try {
+            return $this->objectExporter->exportWithDepth($object, $depth);
+        } catch (Throwable $e) {
+            throw ArrayExportException::unexportableElement($key, $object::class, $depth, $keyPath, $e);
         }
     }
 
-    /**
-     * Format an array key.
-     */
     private function formatKey(int|string $key): string
     {
         return is_int($key) ? (string) $key : $this->valueFormatter->escapeString($key);
     }
 
     /**
-     * Get array keys in the desired order.
-     *
+     * @param array<mixed> $array
      * @return array<int|string>
      */
-    private function getOrderedKeys(array $array, bool $isSequential): array
+    private function orderedKeys(array $array): array
     {
-        if ($isSequential && !$this->config->sortKeys) {
-            // Sequential list keys are already 0..n-1 in order.
-            return array_keys($array);
-        }
-
         $keys = array_keys($array);
-
         if (!$this->config->sortKeys) {
             return $keys;
         }
 
-        usort($keys, static function (int|string $a, int|string $b): int {
-            // Numeric keys first, then string keys alphabetically.
-            $aIsInt = is_int($a);
-            $bIsInt = is_int($b);
-
-            if ($aIsInt && !$bIsInt) {
+        usort($keys, static function (int|string $left, int|string $right): int {
+            if (is_int($left) && is_string($right)) {
                 return -1;
             }
 
-            if (!$aIsInt && $bIsInt) {
+            if (is_string($left) && is_int($right)) {
                 return 1;
             }
 
-            return $a <=> $b;
+            if (is_int($left)) {
+                /** @var int $right */
+                return $left <=> $right;
+            }
+
+            /** @var string $right */
+            return strcmp($left, $right);
         });
 
         return $keys;
+    }
+
+    /**
+     * @param array<mixed> $array
+     * @param array<int|string> $keyPath
+     */
+    private function assertNotReference(array $array, int|string $key, array $keyPath): void
+    {
+        if (\ReflectionReference::fromArrayElement($array, $key) !== null) {
+            throw ArrayExportException::referencedElement($key, $keyPath);
+        }
     }
 }

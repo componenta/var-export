@@ -4,16 +4,17 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Contract;
 
-use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 
-interface ClosureExporterInterface
+interface VarExporterInterface
 {
     /** @throws ExceptionInterface */
-    public function export(Closure $closure): string;
+    public function export(mixed $var): string;
 
     /** @throws ExceptionInterface */
-    public function exportWithDepth(Closure $closure, int $depth): string;
+    public function exportToFile(mixed $var): string;
 
     public function withConfig(ExportConfig $config): static;
+
+    public function getConfig(): ExportConfig;
 }

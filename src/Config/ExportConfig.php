@@ -6,19 +6,13 @@ namespace Componenta\VarExport\Config;
 
 use Componenta\VarExport\Exception\ConfigurationException;
 
-/**
- * Configuration for variable export.
- *
- * Immutable value object that holds all export settings.
- * Use with*() methods to create modified copies.
- */
 final readonly class ExportConfig
 {
     public const int DEFAULT_MAX_DEPTH = 64;
     public const string DEFAULT_INDENT = '    ';
 
     /**
-     * @throws ConfigurationException If configuration values are invalid
+     * @throws ConfigurationException
      */
     public function __construct(
         public FormatterMode $mode = FormatterMode::Standard,
@@ -28,93 +22,48 @@ final readonly class ExportConfig
         public bool $trailingComma = false,
         public ClosureUseMode $closureUseMode = ClosureUseMode::Preserve,
     ) {
-        $this->validateIndent($indent);
-        $this->validateMaxDepth($maxDepth);
+        self::assertIndent($indent);
+
+        if ($maxDepth < 1) {
+            throw ConfigurationException::invalidMaxDepth($maxDepth);
+        }
     }
 
     public function withMode(FormatterMode $mode): self
     {
-        return new self(
-            $mode,
-            $this->indent,
-            $this->maxDepth,
-            $this->sortKeys,
-            $this->trailingComma,
-            $this->closureUseMode,
-        );
+        return new self($mode, $this->indent, $this->maxDepth, $this->sortKeys, $this->trailingComma, $this->closureUseMode);
     }
 
     public function withIndent(string $indent): self
     {
-        return new self(
-            $this->mode,
-            $indent,
-            $this->maxDepth,
-            $this->sortKeys,
-            $this->trailingComma,
-            $this->closureUseMode,
-        );
+        return new self($this->mode, $indent, $this->maxDepth, $this->sortKeys, $this->trailingComma, $this->closureUseMode);
     }
 
     public function withMaxDepth(int $maxDepth): self
     {
-        return new self(
-            $this->mode,
-            $this->indent,
-            $maxDepth,
-            $this->sortKeys,
-            $this->trailingComma,
-            $this->closureUseMode,
-        );
+        return new self($this->mode, $this->indent, $maxDepth, $this->sortKeys, $this->trailingComma, $this->closureUseMode);
     }
 
     public function withSortKeys(bool $sortKeys = true): self
     {
-        return new self(
-            $this->mode,
-            $this->indent,
-            $this->maxDepth,
-            $sortKeys,
-            $this->trailingComma,
-            $this->closureUseMode,
-        );
+        return new self($this->mode, $this->indent, $this->maxDepth, $sortKeys, $this->trailingComma, $this->closureUseMode);
     }
 
     public function withTrailingComma(bool $trailingComma = true): self
     {
-        return new self(
-            $this->mode,
-            $this->indent,
-            $this->maxDepth,
-            $this->sortKeys,
-            $trailingComma,
-            $this->closureUseMode,
-        );
+        return new self($this->mode, $this->indent, $this->maxDepth, $this->sortKeys, $trailingComma, $this->closureUseMode);
     }
 
     public function withClosureUseMode(ClosureUseMode $closureUseMode): self
     {
-        return new self(
-            $this->mode,
-            $this->indent,
-            $this->maxDepth,
-            $this->sortKeys,
-            $this->trailingComma,
-            $closureUseMode,
-        );
+        return new self($this->mode, $this->indent, $this->maxDepth, $this->sortKeys, $this->trailingComma, $closureUseMode);
     }
 
-    /**
-     * Create configuration for pretty output.
-     */
     public static function pretty(): self
     {
         return new self(mode: FormatterMode::Pretty, trailingComma: true);
     }
 
-    /**
-     * Create configuration for compact output.
-     */
     public static function compact(): self
     {
         return new self(mode: FormatterMode::Standard);
@@ -125,26 +74,17 @@ final readonly class ExportConfig
         return $this->mode === FormatterMode::Pretty;
     }
 
-    /**
-     * Validate indent string contains only whitespace.
-     *
-     * @throws ConfigurationException
-     */
-    private function validateIndent(string $indent): void
+    /** @throws ConfigurationException */
+    private static function assertIndent(string $indent): void
     {
-        // Indent must be non-empty and contain only spaces or tabs
-        if ($indent === '' || !preg_match('/^[ \t]+$/', $indent)) {
-            throw ConfigurationException::invalidIndent($indent);
+        if ($indent === "\t") {
+            return;
         }
-    }
 
-    /**
-     * @throws ConfigurationException
-     */
-    private function validateMaxDepth(int $maxDepth): void
-    {
-        if ($maxDepth < 1) {
-            throw ConfigurationException::invalidMaxDepth($maxDepth);
+        if ($indent !== '' && preg_match('/^ +$/D', $indent) === 1) {
+            return;
         }
+
+        throw ConfigurationException::invalidIndent($indent);
     }
 }

@@ -7,48 +7,34 @@ namespace Componenta\VarExport;
 use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
+use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Internal\ValueFormatter;
 use ReflectionClass;
+use ReflectionParameter;
+use ReflectionProperty;
+use SplObjectStorage;
+use Throwable;
 use UnitEnum;
 
-/**
- * Exports simple value objects and enums to their PHP representation.
- *
- * Supports:
- * - Readonly classes with public constructor properties -> `new \ClassName(arg1, arg2)`
- * - Enum cases -> `\ClassName::CaseName`
- *
- * Does NOT support:
- * - Mutable objects, objects with private state, closures as properties
- *
- * Nested arrays in object properties are delegated to the main
- * {@see ArrayExporterInterface} when an `$arrayExporterProvider` callback is
- * supplied - that keeps pretty/sortKeys/trailingComma consistent with the
- * surrounding export. The provider is a Closure (not a direct dependency)
- * so ObjectExporter and ArrayExporter can reference each other without
- * creating a construction-time cycle.
- */
 final readonly class ObjectExporter implements ObjectExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
-    private ?Closure $arrayExporterProvider;
 
     /**
-     * @param Closure(): ArrayExporterInterface|null $arrayExporterProvider
-     *        Invoked lazily to obtain the ArrayExporter used for nested
-     *        array values. When null, nested arrays fall back to a simple
-     *        compact representation.
+     * @param (Closure(): ArrayExporterInterface)|null $arrayExporterProvider
+     *        Legacy extension point retained for source compatibility. The
+     *        returned exporter is always reconfigured before use.
      */
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
         ?ValueFormatterInterface $valueFormatter = null,
-        ?Closure $arrayExporterProvider = null,
+        private ?Closure $arrayExporterProvider = null,
+        private ?ClosureExporterInterface $closureExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
-        $this->arrayExporterProvider = $arrayExporterProvider;
     }
 
     public function export(object $object): string
@@ -58,138 +44,216 @@ final readonly class ObjectExporter implements ObjectExporterInterface
 
     public function exportWithDepth(object $object, int $depth): string
     {
+        if ($depth < 0) {
+            throw new ExportException(sprintf('Depth must be non-negative; got %d.', $depth), ['depth' => $depth]);
+        }
+
+        /** @var SplObjectStorage<object, null> $seen */
+        $seen = new SplObjectStorage();
+
+        return $this->doExport($object, $depth, $seen);
+    }
+
+    public function supports(object $object): bool
+    {
+        try {
+            $this->export($object);
+
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    public function withConfig(ExportConfig $config): static
+    {
+        return new self(
+            $config,
+            $this->valueFormatter,
+            $this->arrayExporterProvider,
+            $this->closureExporter?->withConfig($config),
+        );
+    }
+
+    /** @param SplObjectStorage<object, null> $seen */
+    private function doExport(object $object, int $depth, SplObjectStorage $seen): string
+    {
         if ($depth > $this->config->maxDepth) {
             throw new ExportException(
-                sprintf(
-                    'Maximum nesting depth of %d exceeded while exporting object of type "%s".',
-                    $this->config->maxDepth,
-                    $object::class,
-                ),
+                sprintf('Maximum nesting depth of %d exceeded while exporting "%s".', $this->config->maxDepth, $object::class),
                 ['class' => $object::class, 'max_depth' => $this->config->maxDepth, 'depth' => $depth],
             );
         }
 
         if ($object instanceof UnitEnum) {
-            return $this->exportEnum($object);
+            return '\\' . $object::class . '::' . $object->name;
         }
 
-        return $this->exportObject($object, $depth);
+        if ($seen->contains($object)) {
+            throw ExportException::objectCycle($object::class, $depth);
+        }
+        $seen->attach($object);
+
+        if ($object instanceof Closure) {
+            if ($this->closureExporter === null) {
+                throw new ExportException('Cannot export Closure property without a ClosureExporterInterface.');
+            }
+
+            return $this->closureExporter->exportWithDepth($object, $depth);
+        }
+
+        return $this->exportReadonlyObject($object, $depth, $seen);
     }
 
-    public function supports(object $object): bool
+    /** @param SplObjectStorage<object, null> $seen */
+    private function exportReadonlyObject(object $object, int $depth, SplObjectStorage $seen): string
     {
-        if ($object instanceof UnitEnum) {
-            return true;
-        }
-
         $reflection = new ReflectionClass($object);
-
-        if (!$reflection->isReadOnly()) {
-            return false;
-        }
-
+        $this->assertReconstructableClass($reflection, $object);
         $constructor = $reflection->getConstructor();
 
         if ($constructor === null) {
-            return true;
+            return 'new \\' . $reflection->getName() . '()';
         }
 
-        // Every constructor parameter must map to a public property so we
-        // can round-trip the value via `new ClassName(...)`.
-        foreach ($constructor->getParameters() as $param) {
-            $name = $param->getName();
-            if (!$reflection->hasProperty($name) || !$reflection->getProperty($name)->isPublic()) {
-                return false;
-            }
+        $args = [];
+        foreach ($constructor->getParameters() as $parameter) {
+            $property = $reflection->getProperty($parameter->getName());
+            $value = $property->getValue($object);
+            $args[] = $this->exportValue($value, $depth + 1, $seen);
         }
 
-        return true;
+        $class = '\\' . $reflection->getName();
+        if ($args === []) {
+            return "new {$class}()";
+        }
+
+        if ($this->config->isPretty() && (count($args) > 1 || $this->containsMultilineArgument($args))) {
+            return $this->formatPretty($class, $args, $depth);
+        }
+
+        return "new {$class}(" . implode(', ', $args) . ')';
     }
 
-    public function withConfig(ExportConfig $config): static
+    /** @param ReflectionClass<object> $reflection */
+    private function assertReconstructableClass(ReflectionClass $reflection, object $object): void
     {
-        return new self($config, $this->valueFormatter, $this->arrayExporterProvider);
-    }
-
-    private function exportEnum(UnitEnum $enum): string
-    {
-        return '\\' . $enum::class . '::' . $enum->name;
-    }
-
-    private function exportObject(object $object, int $depth): string
-    {
-        $reflection = new ReflectionClass($object);
-
         if (!$reflection->isReadOnly()) {
+            throw ExportException::unexportableObject($object);
+        }
+
+        if ($reflection->isAnonymous()) {
             throw new ExportException(
-                sprintf(
-                    'Cannot export object of type "%s": only readonly classes are supported.',
-                    $object::class,
-                ),
-                ['class' => $object::class],
+                sprintf('Anonymous readonly class "%s" cannot be named in generated PHP source.', $reflection->getName()),
+                ['class' => $reflection->getName()],
             );
         }
 
         $constructor = $reflection->getConstructor();
+        $properties = $this->instanceProperties($reflection);
 
         if ($constructor === null) {
-            return 'new \\' . $object::class . '()';
-        }
-
-        $args = [];
-
-        foreach ($constructor->getParameters() as $param) {
-            $name = $param->getName();
-
-            if (!$reflection->hasProperty($name) || !$reflection->getProperty($name)->isPublic()) {
+            if ($properties !== []) {
                 throw new ExportException(
-                    sprintf(
-                        'Cannot export object of type "%s": constructor parameter "$%s" has no corresponding public property.',
-                        $object::class,
-                        $name,
-                    ),
-                    ['class' => $object::class, 'parameter' => $name],
+                    sprintf('Readonly class "%s" has state but no constructor that can reconstruct it.', $reflection->getName()),
+                    ['class' => $reflection->getName()],
                 );
             }
 
-            $value = $reflection->getProperty($name)->getValue($object);
-            $args[] = $this->exportValue($value, $depth + 1, $name, $object::class);
+            return;
         }
 
-        $className = '\\' . $object::class;
-
-        if ($args === []) {
-            return "new {$className}()";
+        if (!$constructor->isPublic()) {
+            throw new ExportException(
+                sprintf('Constructor of readonly class "%s" must be public.', $reflection->getName()),
+                ['class' => $reflection->getName()],
+            );
         }
 
-        if ($this->config->isPretty() && count($args) > 1) {
-            return $this->formatPretty($className, $args, $depth);
+        $parameterNames = [];
+        foreach ($constructor->getParameters() as $parameter) {
+            $this->assertReconstructableParameter($reflection, $object, $parameter);
+            $parameterNames[$parameter->getName()] = true;
         }
 
-        return "new {$className}(" . implode(', ', $args) . ')';
+        foreach ($properties as $property) {
+            if (!isset($parameterNames[$property->getName()])) {
+                throw new ExportException(
+                    sprintf(
+                        'Readonly class "%s" has instance property "$%s" that is not represented by its constructor.',
+                        $reflection->getName(),
+                        $property->getName(),
+                    ),
+                    ['class' => $reflection->getName(), 'property' => $property->getName()],
+                );
+            }
+        }
     }
 
     /**
-     * @param array<int, string> $args
+     * @param ReflectionClass<object> $reflection
+     * @return list<ReflectionProperty>
      */
-    private function formatPretty(string $className, array $args, int $depth): string
+    private function instanceProperties(ReflectionClass $reflection): array
     {
-        $baseIndent = str_repeat($this->config->indent, $depth);
-        $itemIndent = str_repeat($this->config->indent, $depth + 1);
-        $trailing = $this->config->trailingComma ? ',' : '';
+        $properties = [];
+        $class = $reflection;
 
-        $formatted = array_map(
-            static fn(string $arg): string => $itemIndent . $arg,
-            $args,
-        );
+        do {
+            foreach ($class->getProperties() as $property) {
+                if ($property->isStatic() || $property->getDeclaringClass()->getName() !== $class->getName()) {
+                    continue;
+                }
 
-        return "new {$className}(\n" . implode(",\n", $formatted) . $trailing . "\n{$baseIndent})";
+                $properties[] = $property;
+            }
+
+            $class = $class->getParentClass();
+        } while ($class !== false);
+
+        return $properties;
     }
 
-    /**
-     * @throws ExportException
-     */
-    private function exportValue(mixed $value, int $depth, string $paramName, string $className): string
+    /** @param ReflectionClass<object> $reflection */
+    private function assertReconstructableParameter(
+        ReflectionClass $reflection,
+        object $object,
+        ReflectionParameter $parameter,
+    ): void {
+        $name = $parameter->getName();
+
+        if ($parameter->isVariadic() || $parameter->isPassedByReference()) {
+            throw new ExportException(
+                sprintf('Constructor parameter "%s::$%s" cannot be variadic or passed by reference.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'parameter' => $name],
+            );
+        }
+
+        if (!$parameter->isPromoted() || !$reflection->hasProperty($name)) {
+            throw new ExportException(
+                sprintf('Constructor parameter "%s::$%s" must be a promoted property.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'parameter' => $name],
+            );
+        }
+
+        $property = $reflection->getProperty($name);
+        if (!$property->isPublic() || !$property->isPromoted() || $property->isVirtual() || $property->hasHooks()) {
+            throw new ExportException(
+                sprintf('Promoted property "%s::$%s" must be public, concrete, and hook-free.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'property' => $name],
+            );
+        }
+
+        if (!$property->isInitialized($object)) {
+            throw new ExportException(
+                sprintf('Promoted property "%s::$%s" is not initialized.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'property' => $name],
+            );
+        }
+    }
+
+    /** @param SplObjectStorage<object, null> $seen */
+    private function exportValue(mixed $value, int $depth, SplObjectStorage $seen): string
     {
         return match (true) {
             is_null($value) => $this->valueFormatter->formatNull(),
@@ -197,63 +261,66 @@ final readonly class ObjectExporter implements ObjectExporterInterface
             is_int($value), is_float($value) => $this->valueFormatter->formatNumeric($value),
             is_string($value) => $this->valueFormatter->escapeString($value),
             is_array($value) => $this->exportArray($value, $depth),
-            $value instanceof UnitEnum => $this->exportEnum($value),
-            is_object($value) => $this->exportWithDepth($value, $depth),
-            default => throw new ExportException(
-                sprintf(
-                    'Cannot export property "%s::$%s": unsupported type "%s".',
-                    $className,
-                    $paramName,
-                    get_debug_type($value),
-                ),
-                ['class' => $className, 'property' => $paramName, 'type' => get_debug_type($value)],
-            ),
+            is_object($value) => $this->doExport($value, $depth, $seen),
+            is_resource($value) => throw ExportException::resourceNotExportable($value),
+            default => throw ExportException::unsupportedType($value),
         };
     }
 
-    /**
-     * Format a nested array. Delegates to the main ArrayExporter when a
-     * provider was supplied so user-visible formatting (pretty layout,
-     * sortKeys, trailingComma) stays consistent with the top level.
-     *
-     * The fallback path - used when no provider is wired - produces a
-     * minimal compact array so that standalone ObjectExporter use still
-     * yields valid PHP.
-     */
+    /** @param array<mixed> $array */
     private function exportArray(array $array, int $depth): string
     {
         if ($this->arrayExporterProvider !== null) {
             $arrayExporter = ($this->arrayExporterProvider)();
-            $baseIndent = str_repeat($this->config->indent, $depth);
+            if (!$arrayExporter instanceof ArrayExporterInterface) {
+                throw new ExportException(
+                    sprintf(
+                        'ObjectExporter array provider must return %s; got %s.',
+                        ArrayExporterInterface::class,
+                        get_debug_type($arrayExporter),
+                    ),
+                    ['type' => get_debug_type($arrayExporter)],
+                );
+            }
 
-            return $arrayExporter->exportAtDepth($array, $depth, $baseIndent);
+            $arrayExporter = $arrayExporter->withConfig($this->config);
+        } else {
+            $arrayExporter = new ArrayExporter(
+                $this->config,
+                $this->closureExporter,
+                $this,
+                $this->valueFormatter,
+            );
         }
 
-        return $this->formatArrayCompact($array, $depth);
+        $baseIndent = str_repeat($this->config->indent, $depth);
+
+        return $arrayExporter->exportAtDepth($array, $depth, $baseIndent);
     }
 
-    private function formatArrayCompact(array $array, int $depth): string
+    /** @param list<string> $args */
+    private function formatPretty(string $class, array $args, int $depth): string
     {
-        if ($array === []) {
-            return '[]';
-        }
+        $baseIndent = str_repeat($this->config->indent, $depth);
+        $itemIndent = str_repeat($this->config->indent, $depth + 1);
+        $trailing = $this->config->trailingComma ? ',' : '';
+        $formatted = array_map(
+            static fn(string $argument): string => $itemIndent . $argument,
+            $args,
+        );
 
-        $isSequential = array_is_list($array);
-        $items = [];
+        return "new {$class}(\n" . implode(",\n", $formatted) . $trailing . "\n{$baseIndent})";
+    }
 
-        foreach ($array as $key => $value) {
-            $exported = $this->exportValue($value, $depth + 1, (string) $key, 'array');
-
-            if ($isSequential) {
-                $items[] = $exported;
-            } else {
-                $formattedKey = is_int($key)
-                    ? (string) $key
-                    : $this->valueFormatter->escapeString($key);
-                $items[] = "{$formattedKey} => {$exported}";
+    /** @param list<string> $args */
+    private function containsMultilineArgument(array $args): bool
+    {
+        foreach ($args as $argument) {
+            if (str_contains($argument, "\n")) {
+                return true;
             }
         }
 
-        return '[' . implode(', ', $items) . ']';
+        return false;
     }
 }

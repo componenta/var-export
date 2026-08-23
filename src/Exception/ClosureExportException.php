@@ -5,195 +5,208 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Exception;
 
 use ReflectionFunction;
+use Throwable;
 
-/**
- * Exception thrown when closure export fails.
- *
- * Provides detailed context including:
- * - Source file and line number (also set as exception's own file/line for rendering)
- * - Closure signature (parameters)
- * - Specific reason for failure
- * - Variable names that caused issues
- *
- * The exception's $file and $line properties point to the problematic closure's
- * location, making it immediately visible in stack traces and error renderers.
- */
-class ClosureExportException extends ExportException
+final class ClosureExportException extends ExportException
 {
-    /**
-     * Create exception when source file cannot be located.
-     */
     public static function sourceNotFound(string $filename): self
     {
         return new self(
-            "Cannot locate closure source file: '{$filename}'. " .
-            "The closure may have been defined in eval()'d code or a stream wrapper.",
+            sprintf('Cannot locate closure source file "%s".', $filename),
             ['filename' => $filename],
             $filename !== 'unknown' ? $filename : null,
         );
     }
 
-    /**
-     * Create exception when source file cannot be read.
-     */
     public static function sourceUnreadable(string $filename): self
     {
-        $reason = match (true) {
-            !file_exists($filename) => 'File does not exist',
-            !is_readable($filename) => 'File is not readable (permission denied)',
-            default => 'Unknown read error',
-        };
-
         return new self(
-            "Cannot read closure source file: '{$filename}'. {$reason}.",
-            ['filename' => $filename, 'reason' => $reason],
+            sprintf('Cannot read closure source file "%s".', $filename),
+            ['filename' => $filename],
             $filename,
         );
     }
 
-    /**
-     * Create exception when closure node cannot be found in AST.
-     */
+    public static function sourceTooLarge(string $filename, int $bytes, int $limit): self
+    {
+        return new self(
+            sprintf(
+                'Closure source file "%s" is %d bytes; configured source limit is %d bytes.',
+                $filename,
+                $bytes,
+                $limit,
+            ),
+            ['filename' => $filename, 'bytes' => $bytes, 'limit' => $limit],
+            $filename,
+        );
+    }
+
+    public static function parsingFailed(string $filename, string $reason, ?Throwable $previous = null): self
+    {
+        return new self(
+            sprintf('Failed to parse closure source file "%s": %s.', $filename, $reason),
+            ['filename' => $filename, 'reason' => $reason],
+            $filename,
+            previous: $previous,
+        );
+    }
+
     public static function nodeNotFound(int $line, string $filename): self
     {
         return new self(
-            "Cannot locate closure AST node at line {$line} in '{$filename}'. " .
-            "The source file may have been modified after the closure was defined, " .
-            "or the closure was created dynamically.",
+            sprintf('Cannot locate closure AST node at %s:%d.', $filename, $line),
             ['line' => $line, 'filename' => $filename],
             $filename,
             $line,
         );
     }
 
-    /**
-     * Create exception when parsing fails.
-     */
-    public static function parsingFailed(string $filename, string $reason): self
+    public static function staleSource(ReflectionFunction $reflection): self
     {
-        return new self(
-            "Failed to parse PHP source file '{$filename}': {$reason}. " .
-            "Ensure the file contains valid PHP syntax.",
-            ['filename' => $filename, 'reason' => $reason],
-            $filename,
-        );
-    }
-
-    /**
-     * Create exception when closure has bound $this.
-     */
-    public static function boundThis(ReflectionFunction $reflector): self
-    {
-        $file = $reflector->getFileName() ?: null;
-        $line = $reflector->getStartLine() ?: null;
-        $boundClass = get_class($reflector->getClosureThis());
-        $signature = self::formatClosureSignature($reflector);
-
-        $fileDisplay = $file ?? 'unknown';
-        $lineDisplay = $line ?? 0;
+        $file = $reflection->getFileName() ?: null;
+        $line = $reflection->getStartLine() ?: null;
 
         return new self(
-            "Closure bound to \$this cannot be exported. " .
-            "Location: {$fileDisplay}:{$lineDisplay}. " .
-            "Signature: {$signature}. " .
-            "Bound to instance of: {$boundClass}. " .
-            "Solution: Use 'static function()' or call \$closure->bindTo(null) before export.",
-            [
-                'file' => $file,
-                'line' => $line,
-                'bound_class' => $boundClass,
-                'signature' => $signature,
-            ],
+            'Closure source no longer matches the runtime Reflection metadata; rebuild from unchanged source.',
+            ['filename' => $file, 'line' => $line, 'closure' => $reflection->getName()],
             $file,
             $line,
         );
     }
 
-    /**
-     * Create exception when closure use variables cannot be inlined.
-     *
-     * @param array<string, string> $variables Variable names mapped to their types
-     * @param string|null $filename Source file
-     * @param int|null $line Source line
-     */
-    public static function cannotInlineUseVariables(
-        array $variables,
-        ?string $filename = null,
-        ?int $line = null,
-    ): self {
-        $details = [];
-        foreach ($variables as $name => $type) {
-            $details[] = "\${$name} ({$type})";
-        }
-        $variableList = implode(', ', $details);
-
-        $location = $filename !== null
-            ? " at {$filename}" . ($line !== null ? ":{$line}" : '')
-            : '';
-
-        return new self(
-            "Cannot inline use() variables{$location}: {$variableList}. " .
-            "Only scalar values and arrays of scalars can be inlined. Nested closures are not supported. " .
-            "Solution: Use ClosureUseMode::Preserve or ensure all captured values are exportable.",
-            [
-                'variables' => $variables,
-                'filename' => $filename,
-                'line' => $line,
-            ],
-            $filename,
-            $line,
-        );
-    }
-
-    /**
-     * Create exception when multiple closures are on the same line.
-     */
     public static function ambiguousLocation(int $line, int $count, string $filename): self
     {
         return new self(
-            "Found {$count} closures on line {$line} in '{$filename}'. " .
-            "Cannot determine which one to export. " .
-            "Solution: Place each closure on a separate line.",
+            sprintf('Found %d indistinguishable closure candidates at %s:%d.', $count, $filename, $line),
             ['line' => $line, 'count' => $count, 'filename' => $filename],
             $filename,
             $line,
         );
     }
 
-    /**
-     * Format closure signature for error messages.
-     */
-    private static function formatClosureSignature(ReflectionFunction $reflector): string
+    public static function boundThis(ReflectionFunction $reflection): self
     {
-        $params = [];
-        foreach ($reflector->getParameters() as $param) {
-            $paramStr = '';
+        $file = $reflection->getFileName() ?: null;
+        $line = $reflection->getStartLine() ?: null;
+        $bound = $reflection->getClosureThis();
 
-            if ($param->hasType()) {
-                $paramStr .= $param->getType() . ' ';
-            }
+        return new self(
+            sprintf(
+                'Closure bound to $this cannot be exported safely%s.',
+                $bound !== null ? sprintf(' (bound class: %s)', $bound::class) : '',
+            ),
+            ['bound_class' => $bound !== null ? $bound::class : null],
+            $file,
+            $line,
+        );
+    }
 
-            if ($param->isPassedByReference()) {
-                $paramStr .= '&';
-            }
+    public static function nonPortableScope(ReflectionFunction $reflection, string $reason): self
+    {
+        $file = $reflection->getFileName() ?: null;
+        $line = $reflection->getStartLine() ?: null;
 
-            if ($param->isVariadic()) {
-                $paramStr .= '...';
-            }
+        return new self(
+            sprintf('Closure class scope cannot be reproduced safely: %s.', $reason),
+            ['closure' => $reflection->getName(), 'reason' => $reason],
+            $file,
+            $line,
+        );
+    }
 
-            $paramStr .= '$' . $param->getName();
-
-            if ($param->isDefaultValueAvailable()) {
-                $paramStr .= ' = ...';
-            }
-
-            $params[] = $paramStr;
+    /**
+     * @param array<string, string> $variables
+     */
+    public static function cannotInlineUseVariables(
+        array $variables,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        $parts = [];
+        foreach ($variables as $name => $type) {
+            $parts[] = sprintf('$%s (%s)', $name, $type);
         }
 
-        $returnType = $reflector->hasReturnType()
-            ? ': ' . $reflector->getReturnType()
-            : '';
+        return new self(
+            sprintf('Cannot freeze closure captures: %s.', implode(', ', $parts)),
+            ['variables' => $variables, 'filename' => $filename, 'line' => $line],
+            $filename,
+            $line,
+        );
+    }
 
-        return 'function(' . implode(', ', $params) . ')' . $returnType;
+    /** @param list<int|string> $path */
+    public static function captureValueNotExportable(
+        string $variable,
+        string $type,
+        array $path,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        return new self(
+            sprintf(
+                'Cannot freeze captured variable $%s at %s: unsupported %s.',
+                $variable,
+                self::formatCapturePath($path),
+                $type,
+            ),
+            ['variable' => $variable, 'type' => $type, 'path' => $path],
+            $filename,
+            $line,
+        );
+    }
+
+    /** @param list<int|string> $path */
+    public static function captureDepthExceeded(
+        string $variable,
+        int $maxDepth,
+        int $depth,
+        array $path,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        return new self(
+            sprintf(
+                'Captured variable $%s exceeds maxDepth %d at depth %d (%s).',
+                $variable,
+                $maxDepth,
+                $depth,
+                self::formatCapturePath($path),
+            ),
+            ['variable' => $variable, 'max_depth' => $maxDepth, 'depth' => $depth, 'path' => $path],
+            $filename,
+            $line,
+        );
+    }
+
+    public static function internalFailure(ReflectionFunction $reflection, Throwable $previous): self
+    {
+        $file = $reflection->getFileName() ?: null;
+        $line = $reflection->getStartLine() ?: null;
+
+        return new self(
+            sprintf('Closure export failed: %s.', $previous->getMessage()),
+            ['closure' => $reflection->getName(), 'exception' => $previous::class],
+            $file,
+            $line,
+            $previous,
+        );
+    }
+
+    /** @param list<int|string> $path */
+    private static function formatCapturePath(array $path): string
+    {
+        if ($path === []) {
+            return 'capture root';
+        }
+
+        $parts = [];
+        foreach ($path as $segment) {
+            $parts[] = is_int($segment)
+                ? sprintf('[%d]', $segment)
+                : sprintf('[%s]', var_export($segment, true));
+        }
+
+        return '$capture' . implode('', $parts);
     }
 }

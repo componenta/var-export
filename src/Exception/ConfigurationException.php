@@ -4,42 +4,32 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Exception;
 
-/**
- * Exception thrown when configuration is invalid.
- */
-class ConfigurationException extends ExportException
+final class ConfigurationException extends ExportException
 {
-    /**
-     * Create exception for invalid indent string.
-     */
     public static function invalidIndent(string $indent): self
     {
-        $escaped = addcslashes($indent, "\0..\37\\");
-        $length = strlen($indent);
-
-        $hint = match (true) {
-            $indent === '' => 'Indent cannot be empty.',
-            trim($indent) !== '' => 'Indent must contain only whitespace characters (spaces or tabs).',
-            default => 'Invalid indent value.',
-        };
-
         return new self(
-            "Invalid indent string (length: {$length}, value: \"{$escaped}\"): {$hint} " .
-            "Use spaces (e.g., '    ') or tabs (e.g., \"\\t\").",
-            ['indent' => $indent, 'length' => $length],
+            sprintf(
+                'Invalid indent %s. Use one or more spaces, or exactly one tab.',
+                var_export($indent, true),
+            ),
+            ['indent' => $indent, 'length' => strlen($indent)],
         );
     }
 
-    /**
-     * Create exception for invalid max depth.
-     */
     public static function invalidMaxDepth(int $maxDepth): self
     {
         return new self(
-            "Invalid maxDepth value: {$maxDepth}. " .
-            "maxDepth must be a positive integer (>= 1). " .
-            "Recommended range: 16-128 for most use cases.",
+            sprintf('Invalid maxDepth %d; expected an integer greater than or equal to 1.', $maxDepth),
             ['max_depth' => $maxDepth],
+        );
+    }
+
+    public static function invalidCacheLimit(string $name, int $value): self
+    {
+        return new self(
+            sprintf('Invalid closure source cache limit %s=%d; expected an integer greater than or equal to 1.', $name, $value),
+            ['option' => $name, 'value' => $value],
         );
     }
 }
