@@ -16,6 +16,8 @@ use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Scalar\MagicConst;
 use PhpParser\NodeVisitorAbstract;
+use ReflectionFunction;
+use Throwable;
 
 final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 {
@@ -63,6 +65,7 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 
         if ($node instanceof FuncCall && $node->name instanceof Name) {
             $this->assertPortableName($node->name, 'function', $node->getStartLine());
+            $this->assertFunctionIsNotSourceLocal($node->name, $node->getStartLine());
 
             return null;
         }
@@ -101,6 +104,70 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
             $this->filename,
             $line ?: $this->line,
         );
+    }
+
+    private function assertFunctionIsNotSourceLocal(Name $name, int $line): void
+    {
+        if ($this->filename === null) {
+            return;
+        }
+
+        $function = $this->resolvedFunctionName($name);
+        if ($function === null || !function_exists($function)) {
+            return;
+        }
+
+        try {
+            $reflection = new ReflectionFunction($function);
+        } catch (Throwable) {
+            return;
+        }
+
+        if ($reflection->isInternal()) {
+            return;
+        }
+
+        $functionFile = $reflection->getFileName();
+        if ($functionFile === false) {
+            return;
+        }
+
+        $source = realpath($this->filename) ?: $this->filename;
+        $definedIn = realpath($functionFile) ?: $functionFile;
+        if ($source !== $definedIn) {
+            return;
+        }
+
+        throw ClosureExportException::nonPortableExpression(
+            sprintf(
+                'function "%s" is defined in the closure provider source file and may not exist when the generated artifact is loaded',
+                ltrim($function, '\\'),
+            ),
+            $this->filename,
+            $line ?: $this->line,
+        );
+    }
+
+    private function resolvedFunctionName(Name $name): ?string
+    {
+        if ($name instanceof FullyQualified) {
+            return $name->toString();
+        }
+
+        if ($name instanceof Name\Relative) {
+            return null;
+        }
+
+        $resolved = $name->getAttribute('resolvedName');
+        if ($resolved instanceof Name) {
+            return $resolved->toString();
+        }
+
+        if (!$name->isUnqualified()) {
+            return $name->toString();
+        }
+
+        return null;
     }
 
     private static function namespaceOf(Name $namespaced): string
