@@ -33,9 +33,9 @@ final class Export
     }
 
     /** @throws ExceptionInterface */
-    public static function toFile(mixed $var, ?ExportConfig $config = null): string
+    public static function statement(mixed $var, ?ExportConfig $config = null): string
     {
-        return self::createExporter($config)->exportToFile($var);
+        return self::createExporter($config)->exportStatement($var);
     }
 
     /**
