@@ -84,6 +84,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         }
 
         $reflection = $this->validator->validate($closure);
+        $this->assertNoStaticLocalState($reflection);
 
         try {
             $candidate = $this->selectCandidate($reflection);
@@ -394,14 +395,43 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         ReflectionFunction $reflection,
     ): void {
         $scope = $reflection->getClosureScopeClass();
+        $className = $candidate->trait !== ''
+            ? ($scope?->getName() ?? '')
+            : $candidate->class;
         $traverser = new NodeTraverser(new MagicConstantResolver(
             $reflection->getFileName() ?: '',
             $candidate->namespace,
             $reflection->getName(),
-            $scope?->getName() ?? '',
+            $className,
             $candidate->trait,
         ));
         $traverser->traverse([$node]);
+    }
+
+    private function assertNoStaticLocalState(ReflectionFunction $reflection): void
+    {
+        $staticLocals = array_diff_key(
+            $reflection->getStaticVariables(),
+            $reflection->getClosureUsedVariables(),
+        );
+        if ($staticLocals === []) {
+            return;
+        }
+
+        $names = array_map(
+            static fn(string $name): string => '$' . $name,
+            array_keys($staticLocals),
+        );
+
+        throw new ClosureExportException(
+            sprintf(
+                'Closure static local variables cannot be exported because their live runtime state is not reconstructable from source: %s.',
+                implode(', ', $names),
+            ),
+            ['variables' => array_keys($staticLocals)],
+            $reflection->getFileName() ?: null,
+            $reflection->getStartLine() ?: null,
+        );
     }
 
     private function resolveSourceSymbols(ClosureNode|ArrowFunction $node): void
