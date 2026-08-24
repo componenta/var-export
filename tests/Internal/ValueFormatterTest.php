@@ -45,9 +45,9 @@ final class ValueFormatterTest extends TestCase
         yield 'negative' => [-3.14, '-3.14'];
         yield 'scientific' => [1.5E10, '15000000000.0'];
         yield 'small' => [0.001, '0.001'];
-        yield 'infinity' => [INF, 'INF'];
-        yield 'negative infinity' => [-INF, '-INF'];
-        yield 'not a number' => [NAN, 'NAN'];
+        yield 'infinity' => [INF, '\\INF'];
+        yield 'negative infinity' => [-INF, '-\\INF'];
+        yield 'not a number' => [NAN, '\\NAN'];
     }
 
     #[DataProvider('stringProvider')]
