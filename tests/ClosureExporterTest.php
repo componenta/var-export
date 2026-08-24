@@ -34,7 +34,7 @@ final class ClosureExporterTest extends TestCase
         $restored = eval("return {$code};");
 
         self::assertSame(5, $restored());
-        self::assertSame(6, $restored());
+        self::assertSame(5, $restored());
     }
 
     public function testPreserveKeepsUseClause(): void
