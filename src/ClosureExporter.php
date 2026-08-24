@@ -330,7 +330,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         try {
             $actual = (new ConstExprEvaluator())->evaluateSilently($nodeDefault);
         } catch (ConstExprEvaluationException) {
-            return true;
+            return false;
         }
 
         return self::sameValue($actual, $parameter->getDefaultValue());
