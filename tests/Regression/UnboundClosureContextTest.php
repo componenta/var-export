@@ -25,6 +25,16 @@ function unboundArrowClosure(int $value): Closure
     return fn(): array => [isset($this), $value];
 }
 
+final class ScopedUnboundClosureFixture
+{
+    public static function make(): Closure
+    {
+        return function (): array {
+            return [isset($this), self::class];
+        };
+    }
+}
+
 final class ObjectContextClosureLoader
 {
     public function load(string $code): Closure
@@ -76,4 +86,14 @@ it('keeps zero-capture Inline closures unbound', function (): void {
 
     expect((new ReflectionFunction($restored))->getClosureThis())->toBeNull()
         ->and($restored())->toBeNull();
+});
+
+it('isolates class-scoped non-static closures before restoring their class scope', function (): void {
+    $original = ScopedUnboundClosureFixture::make();
+    $restored = (new ObjectContextClosureLoader())->load(Export::closure($original));
+    $reflection = new ReflectionFunction($restored);
+
+    expect($reflection->getClosureThis())->toBeNull()
+        ->and($reflection->getClosureScopeClass()?->getName())->toBe(ScopedUnboundClosureFixture::class)
+        ->and($restored())->toBe([false, ScopedUnboundClosureFixture::class]);
 });
