@@ -128,6 +128,14 @@ final readonly class ArrayExporter implements ArrayExporterInterface
 
     private function formatValue(mixed $value, int|string $key, ExportContext $context): string
     {
+        if ($context->depth > $this->config->maxDepth) {
+            throw ArrayExportException::maxDepthExceeded(
+                $this->config->maxDepth,
+                $context->depth,
+                $context->path,
+            );
+        }
+
         if ($this->valueExporter !== null) {
             return $this->valueExporter->exportValue($value, $context);
         }
