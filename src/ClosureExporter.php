@@ -7,8 +7,8 @@ namespace Componenta\VarExport;
 use Closure;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
+use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
 use Componenta\VarExport\Internal\ClosurePortabilityAnalyzer;
 use Componenta\VarExport\Internal\ClosureValidator;
@@ -47,7 +47,7 @@ use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
 
-final readonly class ClosureExporter implements ClosureExporterInterface
+final readonly class ClosureExporter implements ContextualClosureExporterInterface
 {
     private ClosureValidator $validator;
     private UseVariableInliner $inliner;
@@ -69,7 +69,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
 
     public function export(Closure $closure): string
     {
-        return $this->exportWithDepth($closure, 0);
+        return $this->exportWithContext($closure, ExportContext::root());
     }
 
     public function exportWithDepth(Closure $closure, int $depth): string
@@ -81,10 +81,18 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             );
         }
 
-        if ($depth > $this->config->maxDepth) {
+        return $this->exportWithContext(
+            $closure,
+            new ExportContext($depth, baseIndent: str_repeat($this->config->indent, $depth)),
+        );
+    }
+
+    public function exportWithContext(Closure $closure, ExportContext $context): string
+    {
+        if ($context->depth > $this->config->maxDepth) {
             throw ClosureExportException::nestingDepthExceeded(
                 $this->config->maxDepth,
-                $depth,
+                $context->depth,
             );
         }
 
@@ -106,7 +114,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
                     $node,
                     $reflection->getClosureUsedVariables(),
                     $this->config->maxDepth,
-                    captureDepth: $depth + 1,
+                    captureDepth: $context->depth + 1,
                     filename: $reflection->getFileName() ?: null,
                     line: $reflection->getStartLine() ?: null,
                 );
@@ -117,7 +125,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             $code = $this->printer->prettyPrintExpr($node);
 
             return $this->config->isPretty()
-                ? $this->formatPretty($code, $depth)
+                ? $this->formatPretty($code, $context->baseIndent)
                 : $this->formatCompact($code);
         } catch (ClosureExportException $e) {
             throw $e;
@@ -609,13 +617,12 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         return trim($result);
     }
 
-    private function formatPretty(string $code, int $depth): string
+    private function formatPretty(string $code, string $baseIndent): string
     {
-        if ($depth === 0 || !str_contains($code, "\n")) {
+        if ($baseIndent === '' || !str_contains($code, "\n")) {
             return $code;
         }
 
-        $baseIndent = str_repeat($this->config->indent, $depth);
         $tokens = \PhpToken::tokenize('<?php ' . $code);
         $result = '';
 
