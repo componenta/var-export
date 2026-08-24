@@ -46,7 +46,7 @@ final readonly class ClosureValidator
             throw ClosureExportException::nonPortableScope(
                 $reflection,
                 sprintf(
-                    'different lexical and called classes (lexical class %s vs called class %s); late-static-binding state cannot be reconstructed exactly',
+                    'closure scope %s differs from called class %s; late-static-binding state cannot be reconstructed exactly and lexical class metadata alone is insufficient',
                     $scope->getName(),
                     $called->getName(),
                 ),
