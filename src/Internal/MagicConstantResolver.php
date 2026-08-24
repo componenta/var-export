@@ -26,6 +26,7 @@ final class MagicConstantResolver extends NodeVisitorAbstract
         string $functionName,
         private readonly string $className = '',
         private readonly string $traitName = '',
+        private readonly string $propertyName = '',
     ) {
         $this->currentFunctionName = $functionName;
     }
@@ -62,7 +63,7 @@ final class MagicConstantResolver extends NodeVisitorAbstract
             $node instanceof MagicConst\Trait_ => new String_($this->traitName),
             $node instanceof MagicConst\Method,
             $node instanceof MagicConst\Function_ => new String_($this->currentFunctionName),
-            $node instanceof MagicConst\Property => new String_(''),
+            $node instanceof MagicConst\Property => new String_($this->propertyName),
             default => null,
         };
     }
