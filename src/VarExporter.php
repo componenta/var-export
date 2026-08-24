@@ -9,6 +9,7 @@ use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
+use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
 use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
@@ -83,7 +84,9 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
             is_array($value) => $this->arrayExporter instanceof ArrayExporter
                 ? $this->arrayExporter->exportWithContext($value, $context)
                 : $this->arrayExporter->exportAtDepth($value, $context->depth, $context->baseIndent),
-            $value instanceof Closure => $this->closureExporter->exportWithDepth($value, $context->depth),
+            $value instanceof Closure => $this->closureExporter instanceof ContextualClosureExporterInterface
+                ? $this->closureExporter->exportWithContext($value, $context)
+                : $this->closureExporter->exportWithDepth($value, $context->depth),
             is_object($value) => $this->objectExporter->exportWithContext($value, $context),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
             default => throw ExportException::unsupportedType($value),
