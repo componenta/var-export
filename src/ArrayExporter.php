@@ -8,6 +8,7 @@ use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
+use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
 use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
@@ -158,7 +159,10 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         if ($this->closureExporter === null) {
             throw ArrayExportException::closureExporterMissing($key, $context->depth, $context->path);
         }
-        return $this->closureExporter->exportWithDepth($closure, $context->depth);
+
+        return $this->closureExporter instanceof ContextualClosureExporterInterface
+            ? $this->closureExporter->exportWithContext($closure, $context)
+            : $this->closureExporter->exportWithDepth($closure, $context->depth);
     }
 
     private function formatObject(object $object, int|string $key, ExportContext $context): string
