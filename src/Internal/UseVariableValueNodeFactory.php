@@ -45,6 +45,10 @@ final class UseVariableValueNodeFactory
             is_int($value) => new Node\Scalar\Int_($value),
             is_float($value) => self::floatNode($value),
             is_string($value) => new Node\Scalar\String_($value),
+            $value instanceof \UnitEnum => new Node\Expr\ClassConstFetch(
+                new FullyQualified($value::class),
+                new Node\Identifier($value->name),
+            ),
             is_array($value) => self::arrayNode($value, $variable, $maxDepth, $depth, $path, $filename, $line),
             default => throw ClosureExportException::captureValueNotExportable(
                 $variable,
