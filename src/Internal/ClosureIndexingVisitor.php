@@ -8,6 +8,8 @@ use Componenta\VarExport\Source\ClosureSourceCandidate;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Trait_;
 use PhpParser\NodeVisitorAbstract;
@@ -24,8 +26,12 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     /** @var list<string> */
     private array $traitStack = [];
 
+    /** @var list<string> */
+    private array $classStack = [];
+
     private string $namespace = '';
     private string $trait = '';
+    private string $class = '';
 
     public function enterNode(Node $node): null
     {
@@ -39,9 +45,15 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         if ($node instanceof Trait_) {
             $this->traitStack[] = $this->trait;
             $name = $node->name?->toString() ?? '';
-            $this->trait = $this->namespace !== '' && $name !== ''
-                ? $this->namespace . '\\' . $name
-                : $name;
+            $this->trait = $this->qualify($name);
+
+            return null;
+        }
+
+        if ($node instanceof Class_ || $node instanceof Enum_) {
+            $this->classStack[] = $this->class;
+            $name = $node->name?->toString() ?? '';
+            $this->class = $this->qualify($name);
 
             return null;
         }
@@ -51,6 +63,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
                 $node,
                 $this->namespace,
                 $this->trait,
+                $this->class,
             );
         }
 
@@ -59,7 +72,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
     public function leaveNode(Node $node): null
     {
-        if ($node instanceof Trait_) {
+        if ($node instanceof Class_ || $node instanceof Enum_) {
+            $this->class = array_pop($this->classStack) ?? '';
+        } elseif ($node instanceof Trait_) {
             $this->trait = array_pop($this->traitStack) ?? '';
         } elseif ($node instanceof Namespace_) {
             $this->namespace = array_pop($this->namespaceStack) ?? '';
@@ -72,5 +87,14 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function candidatesByLine(): array
     {
         return $this->candidates;
+    }
+
+    private function qualify(string $name): string
+    {
+        if ($name === '' || $this->namespace === '') {
+            return $name;
+        }
+
+        return $this->namespace . '\\' . $name;
     }
 }
