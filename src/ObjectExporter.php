@@ -143,6 +143,12 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
     /** @param ReflectionClass<object> $reflection */
     private function assertReconstructableClass(ReflectionClass $reflection, object $object, ExportContext $context): void
     {
+        if (!$reflection->isUserDefined()) {
+            throw new ExportException(
+                sprintf('Internal/extension class "%s" cannot use generic constructor reconstruction; register a class-specific exporter.', $reflection->getName()),
+                ['class' => $reflection->getName(), 'path' => $context->path],
+            );
+        }
         if (!$reflection->isReadOnly()) {
             throw ExportException::unexportableObject($object);
         }
