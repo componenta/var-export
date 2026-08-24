@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Exception;
 
 use ReflectionFunction;
+use ReflectionParameter;
 use Throwable;
 
 final class ClosureExportException extends ExportException
@@ -22,6 +23,26 @@ final class ClosureExportException extends ExportException
             ['callable' => $reflection->getName()],
             $file,
             $line,
+        );
+    }
+
+    public static function unverifiableParameterDefault(
+        ReflectionParameter $parameter,
+        Throwable $previous,
+    ): self {
+        $function = $parameter->getDeclaringFunction();
+        $file = $function->getFileName() ?: null;
+        $line = $function->getStartLine() ?: null;
+
+        return new self(
+            sprintf(
+                'Cannot verify closure parameter default for "$%s" without executing source code; this default expression is not safely exportable.',
+                $parameter->getName(),
+            ),
+            ['parameter' => $parameter->getName()],
+            $file,
+            $line,
+            $previous,
         );
     }
 
