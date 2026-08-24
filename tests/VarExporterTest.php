@@ -94,9 +94,9 @@ final class VarExporterTest extends TestCase
         self::assertSame(14, $roundTripped(7));
     }
 
-    public function testExportToFile(): void
+    public function testExportStatement(): void
     {
-        $result = $this->exporter->exportToFile(['key' => 'value']);
+        $result = $this->exporter->exportStatement(['key' => 'value']);
 
         self::assertStringEndsWith(';', $result);
     }
