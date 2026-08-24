@@ -15,6 +15,8 @@ use PhpParser\Node\Expr\Include_;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Scalar\MagicConst;
+use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\NodeVisitorAbstract;
 use ReflectionFunction;
 use Throwable;
@@ -31,6 +33,16 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 
     public function enterNode(Node $node): null
     {
+        if ($node instanceof Function_ || $node instanceof ClassLike) {
+            throw ClosureExportException::nonPortableExpression(
+                $node instanceof Function_
+                    ? 'nested named function declarations cannot preserve their lexical declaration context in a standalone expression'
+                    : 'nested class-like declarations cannot preserve their lexical declaration identity in a standalone expression',
+                $this->filename,
+                $node->getStartLine() ?: $this->line,
+            );
+        }
+
         if (
             ($this->policy === ClosureExportPolicy::PortableExpression
                 || $this->sourcePathPolicy === SourcePathPolicy::Reject)
