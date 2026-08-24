@@ -180,11 +180,11 @@ final class IntegrationTest extends TestCase
         self::assertSame('OK', $e3('ok'));
     }
 
-    public function testToFileOutputIsValidPhp(): void
+    public function testStatementOutputIsValidPhp(): void
     {
         $data = ['config' => ['debug' => true, 'env' => 'test']];
 
-        $code = Export::toFile($data);
+        $code = Export::statement($data);
 
         self::assertStringEndsWith(';', $code);
         self::assertStringStartsWith('[', $code);
