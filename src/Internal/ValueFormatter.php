@@ -11,6 +11,20 @@ final readonly class ValueFormatter implements ValueFormatterInterface
 {
     public function formatNumeric(int|float $value): string
     {
+        if (is_float($value)) {
+            if ($value === INF) {
+                return '\\INF';
+            }
+
+            if ($value === -INF) {
+                return '-\\INF';
+            }
+
+            if (is_nan($value)) {
+                return '\\NAN';
+            }
+        }
+
         return var_export($value, true);
     }
 
