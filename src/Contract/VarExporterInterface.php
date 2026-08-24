@@ -12,7 +12,7 @@ interface VarExporterInterface
     public function export(mixed $var): string;
 
     /** @throws ExceptionInterface */
-    public function exportToFile(mixed $var): string;
+    public function exportStatement(mixed $var): string;
 
     public function withConfig(ExportConfig $config): static;
 
