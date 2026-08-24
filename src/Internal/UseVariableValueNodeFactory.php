@@ -6,6 +6,7 @@ namespace Componenta\VarExport\Internal;
 
 use Componenta\VarExport\Exception\ClosureExportException;
 use PhpParser\Node;
+use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 
 /** @internal */
@@ -40,8 +41,8 @@ final class UseVariableValueNodeFactory
         }
 
         return match (true) {
-            is_null($value) => new Node\Expr\ConstFetch(new FullyQualified('null')),
-            is_bool($value) => new Node\Expr\ConstFetch(new FullyQualified($value ? 'true' : 'false')),
+            is_null($value) => new Node\Expr\ConstFetch(new Name('null')),
+            is_bool($value) => new Node\Expr\ConstFetch(new Name($value ? 'true' : 'false')),
             is_int($value) => new Node\Scalar\Int_($value),
             is_float($value) => self::floatNode($value),
             is_string($value) => new Node\Scalar\String_($value),
