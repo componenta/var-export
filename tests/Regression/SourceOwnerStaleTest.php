@@ -25,6 +25,25 @@ it('rejects a class owner changed on disk after the runtime closure was created'
     }
 });
 
+it('rejects a method owner changed on disk after the runtime closure was created', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_method_owner_' . bin2hex(random_bytes(6)) . '.php';
+    $suffix = bin2hex(random_bytes(5));
+    $class = 'ComponentaVarExportMethodOwner' . $suffix;
+
+    try {
+        file_put_contents($file, "<?php class {$class} { public static function makeA(): \\Closure { return static fn(): string => __METHOD__; } } return {$class}::makeA();");
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents($file, "<?php class {$class} { public static function makeB(): \\Closure { return static fn(): string => __METHOD__; } } return {$class}::makeB();");
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});
+
 it('rejects a named-function namespace changed on disk after closure creation', function (): void {
     $file = sys_get_temp_dir() . '/componenta_function_owner_' . bin2hex(random_bytes(6)) . '.php';
     $suffix = bin2hex(random_bytes(5));
