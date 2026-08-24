@@ -20,16 +20,20 @@ use Componenta\VarExport\Source\ClosureSourceCandidate;
 use PhpParser\ConstExprEvaluationException;
 use PhpParser\ConstExprEvaluator;
 use PhpParser\Node;
+use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
 use PhpParser\Node\Expr\ConstFetch;
+use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\IntersectionType as NodeIntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Stmt\Return_;
 use PhpParser\Node\UnionType as NodeUnionType;
 use PhpParser\NodeTraverser;
 use PhpParser\PhpVersion;
@@ -90,6 +94,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         try {
             $candidate = $this->selectCandidate($reflection);
             $node = $candidate->node;
+            $sourceNode = $node;
 
             $this->assertPortableExpression($node, $reflection);
             $this->resolveMagicConstants($node, $candidate, $reflection);
@@ -107,6 +112,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
                 );
             }
 
+            $node = $this->isolateUnboundClosure($node, $sourceNode, $reflection);
             $node = $this->restoreClassScope($node, $reflection);
             $code = $this->printer->prettyPrintExpr($node);
 
@@ -501,6 +507,42 @@ final readonly class ClosureExporter implements ClosureExporterInterface
                 $reflection->getStartLine() ?: null,
             );
         }
+    }
+
+    private function isolateUnboundClosure(
+        Node\Expr $node,
+        ClosureNode|ArrowFunction $sourceNode,
+        ReflectionFunction $reflection,
+    ): Node\Expr {
+        if ($reflection->isStatic() || $reflection->getClosureScopeClass() !== null) {
+            return $node;
+        }
+
+        $uses = [];
+        if ($this->config->closureUseMode === ClosureUseMode::Preserve) {
+            if ($sourceNode instanceof ClosureNode) {
+                foreach ($sourceNode->uses as $use) {
+                    if (!is_string($use->var->name)) {
+                        continue;
+                    }
+
+                    $uses[] = new ClosureUse(
+                        new Variable($use->var->name),
+                        $use->byRef,
+                    );
+                }
+            } else {
+                foreach (array_keys($reflection->getClosureUsedVariables()) as $name) {
+                    $uses[] = new ClosureUse(new Variable($name));
+                }
+            }
+        }
+
+        return new FuncCall(new ClosureNode([
+            'static' => true,
+            'uses' => $uses,
+            'stmts' => [new Return_($node)],
+        ]));
     }
 
     private function restoreClassScope(Node\Expr $node, ReflectionFunction $reflection): Node\Expr
