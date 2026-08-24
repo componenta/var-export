@@ -49,14 +49,14 @@ final class ArrayExporterTest extends TestCase
         (new ArrayExporter())->export($value);
     }
 
-    public function testMaximumDepthIsAppliedAtBoundary(): void
+    public function testMaximumDepthIsAppliedToEveryValue(): void
     {
         $exporter = new ArrayExporter(new ExportConfig(maxDepth: 2));
 
-        self::assertSame('[[[1]]]', $exporter->export([[[1]]]));
+        self::assertSame('[[1]]', $exporter->export([[1]]));
 
         $this->expectException(ArrayExportException::class);
-        $exporter->export([[[[1]]]]);
+        $exporter->export([[[1]]]);
     }
 
     public function testStandaloneClosureExportFailsInsteadOfProducingPlaceholder(): void
