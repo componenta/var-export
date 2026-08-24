@@ -30,12 +30,13 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     /** @var list<string> */
     private array $classStack = [];
 
-    /** @var list<array{string, string}> */
+    /** @var list<array{string, string, string}> */
     private array $functionScopeStack = [];
 
     private string $namespace = '';
     private string $trait = '';
     private string $class = '';
+    private string $function = '';
 
     public function enterNode(Node $node): null
     {
@@ -63,9 +64,10 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         }
 
         if ($node instanceof Function_) {
-            $this->functionScopeStack[] = [$this->class, $this->trait];
+            $this->functionScopeStack[] = [$this->class, $this->trait, $this->function];
             $this->class = '';
             $this->trait = '';
+            $this->function = $this->qualify($node->name->toString());
 
             return null;
         }
@@ -76,6 +78,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
                 $this->namespace,
                 $this->trait,
                 $this->class,
+                $this->function,
             );
         }
 
@@ -85,7 +88,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function leaveNode(Node $node): null
     {
         if ($node instanceof Function_) {
-            [$this->class, $this->trait] = array_pop($this->functionScopeStack) ?? ['', ''];
+            [$this->class, $this->trait, $this->function] = array_pop($this->functionScopeStack) ?? ['', '', ''];
         } elseif ($node instanceof Class_ || $node instanceof Enum_) {
             $this->class = array_pop($this->classStack) ?? '';
         } elseif ($node instanceof Trait_) {
