@@ -7,7 +7,6 @@ namespace Componenta\VarExport;
 use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
-use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
@@ -23,7 +22,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
 {
     private ValueFormatterInterface $valueFormatter;
     private ArrayExporterInterface $arrayExporter;
-    private ClosureExporterInterface $closureExporter;
+    private ContextualClosureExporterInterface $closureExporter;
     private ContextualObjectExporterInterface $objectExporter;
     private ClosureSourceCacheInterface $sourceCache;
 
@@ -32,7 +31,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
         ?ClosureSourceCacheInterface $sourceCache = null,
         ?ContextualObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
-        ?ClosureExporterInterface $closureExporter = null,
+        ?ContextualClosureExporterInterface $closureExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
         $this->sourceCache = $sourceCache ?? new ClosureSourceCache();
@@ -84,9 +83,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
             is_array($value) => $this->arrayExporter instanceof ArrayExporter
                 ? $this->arrayExporter->exportWithContext($value, $context)
                 : $this->arrayExporter->exportAtDepth($value, $context->depth, $context->baseIndent),
-            $value instanceof Closure => $this->closureExporter instanceof ContextualClosureExporterInterface
-                ? $this->closureExporter->exportWithContext($value, $context)
-                : $this->closureExporter->exportWithDepth($value, $context->depth),
+            $value instanceof Closure => $this->closureExporter->exportWithContext($value, $context),
             is_object($value) => $this->objectExporter->exportWithContext($value, $context),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
             default => throw ExportException::unsupportedType($value),
@@ -119,7 +116,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
         return $this->arrayExporter;
     }
 
-    public function getClosureExporter(): ClosureExporterInterface
+    public function getClosureExporter(): ContextualClosureExporterInterface
     {
         return $this->closureExporter;
     }
