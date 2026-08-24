@@ -514,7 +514,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         ClosureNode|ArrowFunction $sourceNode,
         ReflectionFunction $reflection,
     ): Node\Expr {
-        if ($reflection->isStatic() || $reflection->getClosureScopeClass() !== null) {
+        if ($reflection->isStatic()) {
             return $node;
         }
 
