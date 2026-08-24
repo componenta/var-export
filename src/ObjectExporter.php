@@ -8,6 +8,7 @@ use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
+use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
 use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
@@ -71,7 +72,10 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             if ($this->closureExporter === null) {
                 throw new ExportException(sprintf('Cannot export Closure at %s without a ClosureExporterInterface.', $context->location()), ['path' => $context->path]);
             }
-            return $this->closureExporter->exportWithDepth($object, $context->depth);
+
+            return $this->closureExporter instanceof ContextualClosureExporterInterface
+                ? $this->closureExporter->exportWithContext($object, $context)
+                : $this->closureExporter->exportWithDepth($object, $context->depth);
         }
 
         if (!$this->config->allowGenericReadonlyObjects) {
@@ -123,10 +127,10 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         }
 
         $args = [];
+        $argumentIndent = $context->baseIndent . $this->config->indent;
         foreach ($constructor->getParameters() as $parameter) {
             $property = $reflection->getProperty($parameter->getName());
             $value = $property->getValue($object);
-            $argumentIndent = str_repeat($this->config->indent, $context->depth + 1);
             $args[] = $this->exportValue($value, $context->child($parameter->getName(), $argumentIndent));
         }
 
@@ -135,7 +139,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             return "new {$class}()";
         }
         if ($this->config->isPretty() && (count($args) > 1 || $this->containsMultilineArgument($args))) {
-            return $this->formatPretty($class, $args, $context->depth);
+            return $this->formatPretty($class, $args, $context);
         }
         return "new {$class}(" . implode(', ', $args) . ')';
     }
@@ -224,6 +228,13 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
 
     private function exportValue(mixed $value, ExportContext $context): string
     {
+        if ($context->depth > $this->config->maxDepth) {
+            throw new ExportException(
+                sprintf('Maximum nesting depth of %d exceeded at %s.', $this->config->maxDepth, $context->location()),
+                ['max_depth' => $this->config->maxDepth, 'depth' => $context->depth, 'path' => $context->path],
+            );
+        }
+
         if ($this->valueExporter !== null) {
             return $this->valueExporter->exportValue($value, $context);
         }
@@ -258,10 +269,10 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
     }
 
     /** @param list<string> $args */
-    private function formatPretty(string $class, array $args, int $depth): string
+    private function formatPretty(string $class, array $args, ExportContext $context): string
     {
-        $baseIndent = str_repeat($this->config->indent, $depth);
-        $itemIndent = str_repeat($this->config->indent, $depth + 1);
+        $baseIndent = $context->baseIndent;
+        $itemIndent = $baseIndent . $this->config->indent;
         $trailing = $this->config->trailingComma ? ',' : '';
         $formatted = array_map(static fn(string $argument): string => $itemIndent . $argument, $args);
         return "new {$class}(\n" . implode(",\n", $formatted) . $trailing . "\n{$baseIndent})";
