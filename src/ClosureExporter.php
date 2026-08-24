@@ -38,6 +38,7 @@ use ReflectionFunction;
 use ReflectionIntersectionType;
 use ReflectionNamedType;
 use ReflectionParameter;
+use ReflectionReference;
 use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
@@ -219,14 +220,22 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         }
 
         if ($node instanceof ClosureNode) {
+            $usedVariables = $reflection->getClosureUsedVariables();
             $useNames = [];
             foreach ($node->uses as $use) {
-                if (is_string($use->var->name)) {
-                    $useNames[] = $use->var->name;
+                if (!is_string($use->var->name)) {
+                    continue;
+                }
+
+                $name = $use->var->name;
+                $useNames[] = $name;
+                $isReference = ReflectionReference::fromArrayElement($usedVariables, $name) !== null;
+                if ($use->byRef !== $isReference) {
+                    return false;
                 }
             }
 
-            if ($useNames !== array_keys($reflection->getClosureUsedVariables())) {
+            if ($useNames !== array_keys($usedVariables)) {
                 return false;
             }
         }
