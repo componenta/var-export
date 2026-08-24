@@ -165,7 +165,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
 
         foreach ($candidates as $candidate) {
             $candidateError = null;
-            if ($this->matchesReflection($candidate->node, $reflection, $candidateError)) {
+            if ($this->matchesReflection($candidate, $reflection, $candidateError)) {
                 $matches[] = $candidate;
                 continue;
             }
@@ -189,10 +189,15 @@ final readonly class ClosureExporter implements ClosureExporterInterface
     }
 
     private function matchesReflection(
-        ClosureNode|ArrowFunction $node,
+        ClosureSourceCandidate $candidate,
         ReflectionFunction $reflection,
         ?ClosureExportException &$deferredError = null,
     ): bool {
+        if (!$this->sourceOwnerMatches($candidate, $reflection)) {
+            return false;
+        }
+
+        $node = $candidate->node;
         if ($node->getEndLine() !== $reflection->getEndLine()) {
             return false;
         }
@@ -275,6 +280,20 @@ final readonly class ClosureExporter implements ClosureExporterInterface
 
                 return false;
             }
+        }
+
+        return true;
+    }
+
+    private function sourceOwnerMatches(ClosureSourceCandidate $candidate, ReflectionFunction $reflection): bool
+    {
+        $name = $reflection->getName();
+        if ($candidate->class !== '') {
+            return str_contains($name, $candidate->class . '::');
+        }
+
+        if ($candidate->function !== '') {
+            return str_contains($name, $candidate->function . '()');
         }
 
         return true;
