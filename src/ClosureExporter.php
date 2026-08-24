@@ -134,6 +134,7 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             $this->config->sourcePathPolicy,
             $reflection->getFileName() ?: null,
             $reflection->getStartLine() ?: null,
+            $reflection->getName(),
         );
 
         (new NodeTraverser($analyzer))->traverse([$node]);
@@ -153,12 +154,24 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             throw ClosureExportException::nodeNotFound($startLine, $filename);
         }
 
-        $matches = array_values(array_filter(
-            $candidates,
-            fn(ClosureSourceCandidate $candidate): bool => $this->matchesReflection($candidate->node, $reflection),
-        ));
+        $matches = [];
+        $deferredError = null;
+
+        foreach ($candidates as $candidate) {
+            $candidateError = null;
+            if ($this->matchesReflection($candidate->node, $reflection, $candidateError)) {
+                $matches[] = $candidate;
+                continue;
+            }
+
+            $deferredError ??= $candidateError;
+        }
 
         if ($matches === []) {
+            if ($deferredError !== null) {
+                throw $deferredError;
+            }
+
             throw ClosureExportException::staleSource($reflection);
         }
 
@@ -169,8 +182,11 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         return $matches[0];
     }
 
-    private function matchesReflection(ClosureNode|ArrowFunction $node, ReflectionFunction $reflection): bool
-    {
+    private function matchesReflection(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+        ?ClosureExportException &$deferredError = null,
+    ): bool {
         if ($node->getEndLine() !== $reflection->getEndLine()) {
             return false;
         }
@@ -187,6 +203,9 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         if (count($node->params) !== count($parameters)) {
             return false;
         }
+
+        /** @var list<array{Node\Expr, ReflectionParameter}> $defaults */
+        $defaults = [];
 
         foreach ($parameters as $index => $parameter) {
             $nodeParameter = $node->params[$index];
@@ -210,8 +229,8 @@ final readonly class ClosureExporter implements ClosureExporterInterface
                 return false;
             }
 
-            if ($nodeParameter->default !== null && !$this->defaultMatches($nodeParameter->default, $parameter)) {
-                return false;
+            if ($nodeParameter->default !== null) {
+                $defaults[] = [$nodeParameter->default, $parameter];
             }
         }
 
@@ -236,6 +255,18 @@ final readonly class ClosureExporter implements ClosureExporterInterface
             }
 
             if ($useNames !== array_keys($usedVariables)) {
+                return false;
+            }
+        }
+
+        foreach ($defaults as [$nodeDefault, $parameter]) {
+            try {
+                if (!$this->defaultMatches($nodeDefault, $parameter)) {
+                    return false;
+                }
+            } catch (ClosureExportException $e) {
+                $deferredError = $e;
+
                 return false;
             }
         }
