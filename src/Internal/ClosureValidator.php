@@ -15,6 +15,12 @@ final readonly class ClosureValidator
     public function validate(Closure $closure): ReflectionFunction
     {
         $reflection = new ReflectionFunction($closure);
+        $name = $reflection->getName();
+
+        if ($name !== '{closure}' && !str_starts_with($name, '{closure:')) {
+            throw ClosureExportException::namedCallable($reflection);
+        }
+
         $filename = $reflection->getFileName();
 
         if ($filename === false || !is_file($filename)) {
