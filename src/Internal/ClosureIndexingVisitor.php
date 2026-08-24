@@ -9,6 +9,7 @@ use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
@@ -30,13 +31,17 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     /** @var list<string> */
     private array $classStack = [];
 
-    /** @var list<array{string, string, string}> */
+    /** @var list<string> */
+    private array $methodStack = [];
+
+    /** @var list<array{string, string, string, string}> */
     private array $functionScopeStack = [];
 
     private string $namespace = '';
     private string $trait = '';
     private string $class = '';
     private string $function = '';
+    private string $method = '';
 
     public function enterNode(Node $node): null
     {
@@ -63,10 +68,18 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
             return null;
         }
 
+        if ($node instanceof ClassMethod) {
+            $this->methodStack[] = $this->method;
+            $this->method = $node->name->toString();
+
+            return null;
+        }
+
         if ($node instanceof Function_) {
-            $this->functionScopeStack[] = [$this->class, $this->trait, $this->function];
+            $this->functionScopeStack[] = [$this->class, $this->trait, $this->function, $this->method];
             $this->class = '';
             $this->trait = '';
+            $this->method = '';
             $this->function = $this->qualify($node->name->toString());
 
             return null;
@@ -79,6 +92,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
                 $this->trait,
                 $this->class,
                 $this->function,
+                $this->method,
             );
         }
 
@@ -88,7 +102,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function leaveNode(Node $node): null
     {
         if ($node instanceof Function_) {
-            [$this->class, $this->trait, $this->function] = array_pop($this->functionScopeStack) ?? ['', '', ''];
+            [$this->class, $this->trait, $this->function, $this->method] = array_pop($this->functionScopeStack) ?? ['', '', '', ''];
+        } elseif ($node instanceof ClassMethod) {
+            $this->method = array_pop($this->methodStack) ?? '';
         } elseif ($node instanceof Class_ || $node instanceof Enum_) {
             $this->class = array_pop($this->classStack) ?? '';
         } elseif ($node instanceof Trait_) {
