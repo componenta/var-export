@@ -29,13 +29,13 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?ClosureSourceCacheInterface $astCache = null,
+        ?ClosureSourceCacheInterface $sourceCache = null,
         ?ContextualObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
         ?ClosureExporterInterface $closureExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
-        $this->sourceCache = $astCache ?? new ClosureSourceCache();
+        $this->sourceCache = $sourceCache ?? new ClosureSourceCache();
         $this->closureExporter = $closureExporter ?? new ClosureExporter($config, $this->sourceCache);
 
         $objectExporter ??= new ObjectExporter(
