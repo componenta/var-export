@@ -56,11 +56,11 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?ClosureSourceCacheInterface $astCache = null,
+        ?ClosureSourceCacheInterface $sourceCache = null,
     ) {
         $this->validator = new ClosureValidator();
         $this->inliner = new UseVariableInliner();
-        $this->sourceCache = $astCache ?? new ClosureSourceCache();
+        $this->sourceCache = $sourceCache ?? new ClosureSourceCache();
         $this->printer = new PrettyPrinter([
             'indent' => $this->config->indent,
             'phpVersion' => PhpVersion::getHostVersion(),
@@ -299,6 +299,14 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
         if ($candidate->function !== '') {
             return str_contains($name, $candidate->function . '()');
+        }
+
+        if ($candidate->trait !== '') {
+            if ($candidate->method !== '') {
+                return str_contains($name, $candidate->trait . '::' . $candidate->method . '()');
+            }
+
+            return str_contains($name, $candidate->trait . '::');
         }
 
         if ($candidate->method !== '') {
@@ -551,6 +559,13 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         ReflectionFunction $reflection,
     ): Node\Expr {
         if ($reflection->isStatic()) {
+            return $node;
+        }
+
+        if (
+            $this->config->closureUseMode === ClosureUseMode::Inline
+            && $reflection->getClosureUsedVariables() !== []
+        ) {
             return $node;
         }
 
