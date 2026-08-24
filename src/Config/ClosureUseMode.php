@@ -5,24 +5,25 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Config;
 
 /**
- * Determines how lexical closure captures are represented.
+ * Defines how captured closure variables (use clause) are handled.
  */
-enum ClosureUseMode: string
+enum ClosureUseMode
 {
     /**
-     * Keep the original use()/implicit arrow capture syntax.
+     * Keep captures as variables (`use ($a, $b)`).
      *
-     * The generated closure therefore still depends on variables in the scope
-     * where the generated expression is evaluated.
+     * The generated expression is source-oriented: those variables must exist
+     * in the scope where the generated closure expression is evaluated.
      */
-    case Preserve = 'preserve';
+    case Preserve;
 
     /**
-     * Freeze captured scalar/array values into a self-contained creator
-     * expression while keeping the original closure body and variable
-     * semantics intact.
+     * Freeze supported capture values into a static creator expression.
      *
-     * By-reference captures and arrays containing references are rejected.
+     * Supported capture values are null, scalars, enum cases and nested arrays
+     * of those values without PHP references. Object instances, resources,
+     * nested Closure objects and by-reference captures are rejected rather than
+     * silently changing their identity/reference semantics.
      */
-    case Inline = 'inline';
+    case Inline;
 }
