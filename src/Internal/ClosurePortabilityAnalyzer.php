@@ -28,6 +28,7 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
         private readonly SourcePathPolicy $sourcePathPolicy,
         private readonly ?string $filename = null,
         private readonly ?int $line = null,
+        private readonly ?string $functionName = null,
     ) {
     }
 
@@ -38,6 +39,40 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
                 $node instanceof Function_
                     ? 'nested named function declarations cannot preserve their lexical declaration context in a standalone expression'
                     : 'nested class-like declarations cannot preserve their lexical declaration identity in a standalone expression',
+                $this->filename,
+                $node->getStartLine() ?: $this->line,
+            );
+        }
+
+        if ($node instanceof Include_) {
+            throw ClosureExportException::nonPortableExpression(
+                'include/require observes the generated artifact location and cannot be reproduced exactly after relocation',
+                $this->filename,
+                $node->getStartLine() ?: $this->line,
+            );
+        }
+
+        if ($node instanceof Eval_) {
+            throw ClosureExportException::nonPortableExpression(
+                'eval() observes the generated artifact file/scope context and cannot be reproduced exactly after relocation',
+                $this->filename,
+                $node->getStartLine() ?: $this->line,
+            );
+        }
+
+        if (
+            ($this->policy === ClosureExportPolicy::PortableExpression
+                || $this->sourcePathPolicy === SourcePathPolicy::Reject)
+            && ($node instanceof MagicConst\Function_ || $node instanceof MagicConst\Method)
+            && $this->filename !== null
+            && $this->functionName !== null
+            && str_contains($this->functionName, $this->filename)
+        ) {
+            throw ClosureExportException::nonPortableExpression(
+                sprintf(
+                    '%s resolves to an anonymous-closure name containing the absolute source file path',
+                    $node instanceof MagicConst\Function_ ? '__FUNCTION__' : '__METHOD__',
+                ),
                 $this->filename,
                 $node->getStartLine() ?: $this->line,
             );
@@ -57,22 +92,6 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 
         if ($this->policy !== ClosureExportPolicy::PortableExpression) {
             return null;
-        }
-
-        if ($node instanceof Include_) {
-            throw ClosureExportException::nonPortableExpression(
-                'include/require depends on artifact location and include_path',
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
-        }
-
-        if ($node instanceof Eval_) {
-            throw ClosureExportException::nonPortableExpression(
-                'eval() inherits runtime context that cannot be represented safely as a standalone portable expression',
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
         }
 
         if ($node instanceof FuncCall && $node->name instanceof Name) {
