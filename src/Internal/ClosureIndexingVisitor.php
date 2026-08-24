@@ -10,6 +10,7 @@ use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\Enum_;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Trait_;
 use PhpParser\NodeVisitorAbstract;
@@ -28,6 +29,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
     /** @var list<string> */
     private array $classStack = [];
+
+    /** @var list<array{string, string}> */
+    private array $functionScopeStack = [];
 
     private string $namespace = '';
     private string $trait = '';
@@ -58,6 +62,14 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
             return null;
         }
 
+        if ($node instanceof Function_) {
+            $this->functionScopeStack[] = [$this->class, $this->trait];
+            $this->class = '';
+            $this->trait = '';
+
+            return null;
+        }
+
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             $this->candidates[$node->getStartLine()][] = new ClosureSourceCandidate(
                 $node,
@@ -72,7 +84,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
     public function leaveNode(Node $node): null
     {
-        if ($node instanceof Class_ || $node instanceof Enum_) {
+        if ($node instanceof Function_) {
+            [$this->class, $this->trait] = array_pop($this->functionScopeStack) ?? ['', ''];
+        } elseif ($node instanceof Class_ || $node instanceof Enum_) {
             $this->class = array_pop($this->classStack) ?? '';
         } elseif ($node instanceof Trait_) {
             $this->trait = array_pop($this->traitStack) ?? '';
