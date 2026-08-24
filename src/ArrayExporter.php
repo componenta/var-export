@@ -64,13 +64,6 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         );
     }
 
-    /** @deprecated Use VarExporter::exportToFile() or Export::toFile(). */
-    /** @param array<mixed> $array */
-    public function exportWithSemicolon(array $array): string
-    {
-        return $this->export($array) . ';';
-    }
-
     /** @param array<mixed> $array */
     private function formatArray(array $array, ExportContext $context): string
     {
