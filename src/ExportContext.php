@@ -28,6 +28,10 @@ final readonly class ExportContext
             throw new \InvalidArgumentException(sprintf('Export depth must be non-negative; got %d.', $depth));
         }
 
+        if ($baseIndent !== '' && strspn($baseIndent, " \t") !== strlen($baseIndent)) {
+            throw new \InvalidArgumentException('Export base indentation may contain only spaces and tabs.');
+        }
+
         $this->path = $path;
         $this->activeObjects = $activeObjects ?? new SplObjectStorage();
     }
