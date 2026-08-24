@@ -23,7 +23,7 @@ VarExport uses **value semantics**. It supports:
 
 - `null`, booleans, integers, floats, and arbitrary byte strings;
 - arrays that do not contain PHP references;
-- closures whose source file is available;
+- anonymous source closures and arrow functions whose source file is available;
 - enum cases;
 - readonly value objects only when generic readonly export is explicitly enabled, or when a caller supplies a class-specific object exporter.
 
@@ -37,7 +37,10 @@ It deliberately rejects or does not preserve:
 - generic readonly objects unless explicitly enabled;
 - readonly classes whose state cannot be proven reconstructable from promoted constructor properties;
 - closures bound to `$this`;
-- class-scoped closures where lexical and called class differ;
+- late-static-binding closures where the runtime closure scope and called class differ;
+- closures created from named callables (`Closure::fromCallable()`);
+- closures with static local variables, because their live runtime state cannot be seeded into a reconstructed closure;
+- closures containing nested named-function or class-like declarations, whose declaration identity cannot be preserved by an expression-only exporter;
 - closures created by `eval()` or otherwise lacking readable source.
 
 When `sortKeys` is enabled, associative-array iteration order is intentionally canonicalized and therefore is not an order-preserving round trip.
@@ -136,7 +139,7 @@ VarExport conceptually emits:
 })()
 ```
 
-This preserves local write/lvalue semantics and nested closure scopes. By-reference captures (`use (&$x)`) are rejected rather than silently changed. Captured arrays are subject to the same `maxDepth` policy and must not contain references.
+This preserves local write/lvalue semantics and nested closure scopes. By-reference captures (`use (&$x)`) are rejected rather than silently changed. Inline capture values are intentionally limited to `null`, scalar values, and nested reference-free arrays; objects (including enum instances), resources, and nested `Closure` objects are rejected. Captured arrays are subject to the same global `maxDepth` policy.
 
 ### `ClosureUseMode::Inline`
 
@@ -152,9 +155,17 @@ The source cache indexes closures by source line and namespace. In the default `
 
 For build artifacts use `ClosureExportPolicy::PortableExpression`. In this mode VarExport rejects source-location-dependent constructs instead of producing a cache whose behavior can differ after deployment: `__FILE__`/`__DIR__`, `include`/`require`, `eval()`, and unqualified function/constant fallback inside namespaces are rejected. Imported or fully-qualified external functions remain valid; functions defined in the closure provider source file are rejected because that file may not be loaded with the artifact. Runtime user-defined constants are rejected as well because their definition is not guaranteed to be present when the artifact is loaded. `SourcePathPolicy::Reject` can additionally forbid `__FILE__`/`__DIR__` in `SourceBound` mode.
 
-Static/class-scoped closures can be preserved when their lexical and called class are the same. The generated expression restores the class scope using `Closure::bind()`. This allows `self::`, `parent::`, private/protected access, and source magic constants to retain their intended semantics.
+Class-scoped closures are preserved when the runtime closure scope and called class agree. The generated expression restores the runtime scope using `Closure::bind()`, while lexical source metadata is retained separately for magic constants. This also supports an explicit `Closure::bind()` rebind to a single runtime class: `self::`/`parent::`/private access follow the rebound scope, while source lexical magic constants keep PHP semantics.
 
-Closures bound to an object (`$this`) and late-static-binding cases where lexical/called class differ are rejected because exact reconstruction is not guaranteed.
+Closures bound to an object (`$this`) and late-static-binding cases where Reflection reports different closure-scope and called classes are rejected because that called-scope state cannot be reconstructed exactly. Closures with static local variables are also rejected because Reflection exposes their live state but PHP provides no safe public mechanism to seed that state into a newly reconstructed closure.
+
+Parameter defaults must also be safely comparable without executing source code. Context-dependent defaults that the parser cannot evaluate safely (for example `new Foo()` defaults) are rejected explicitly rather than guessed.
+
+`ClosureExporter` is intentionally an anonymous-source exporter. A `Closure` created from a named function or method with `Closure::fromCallable()` is rejected; consumers that need named callables should serialize the callable identity explicitly and reconstruct it with a class-specific strategy. Nested named-function and class-like declarations are rejected as well because a standalone expression cannot reliably reproduce their lexical declaration identity.
+
+### Source consistency
+
+Closure export is source-based. The source file on disk must still represent the same source revision from which the runtime closure was compiled. VarExport compares the current AST with Reflection metadata (location, signature, defaults, capture names and reference mode), but PHP Reflection does not expose the original closure-body hash. Consequently, a **body-only source edit that preserves all observable Reflection metadata cannot be proven stale**. Long-running processes and hot-reload tooling must not export an old runtime closure after replacing its source file; recreate the closure from the new source first. The SHA-256 source cache guarantees freshness relative to the current file, not identity with an already-created runtime closure.
 
 ## Readonly value objects
 
@@ -188,11 +199,11 @@ $code = Export::var(
 );
 ```
 
-In opt-in mode the constructor must be public; parameters must not be variadic or by-reference and must be promoted public properties. Virtual/hooked properties, extra instance state, anonymous classes and `__unserialize()` hydration are rejected. The generated expression still executes the constructor at restore time, so opt in only for classes whose constructor is part of their stable value contract.
+In opt-in mode the class must be user-defined and the constructor must be public; parameters must not be variadic or by-reference and must be promoted public properties. Internal/extension classes, virtual/hooked properties, extra instance state, anonymous classes and `__unserialize()` hydration are rejected. The generated expression still executes the constructor at restore time, so opt in only for classes whose constructor is part of their stable value contract.
 
 ## Recursive dispatcher
 
-`VarExporter` is the single recursive value dispatcher. Arrays and generic objects never select a nested exporter on their own when they are used through `VarExporter`; nested values are routed back through the root dispatcher with an `ExportContext` containing depth and value path. Custom object exporters supplied to `VarExporter` must implement `ContextualObjectExporterInterface`. This is intentional: every nested value must return to the same root dispatcher so framework-specific values remain visible at every nesting level instead of being bypassed by a fallback exporter.
+`VarExporter` is the single recursive value dispatcher. Arrays and generic objects never select a nested exporter on their own when they are used through `VarExporter`; nested values are routed back through the root dispatcher with an `ExportContext` containing depth and value path. Custom object exporters supplied to `VarExporter` must implement `ContextualObjectExporterInterface`. This is intentional: every nested value must return to the same root dispatcher so framework-specific values remain visible at every nesting level instead of being bypassed by a fallback exporter. Reconfigure a composed graph through `VarExporter::withConfig()`; low-level exporter `withConfig()` methods are standalone composition APIs and intentionally do not retain a previously bound root dispatcher.
 
 ## Reusing exporters and source cache
 
