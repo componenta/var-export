@@ -58,9 +58,9 @@ final class VarExporterTest extends TestCase
     {
         yield 'simple' => [3.14, '3.14'];
         yield 'negative' => [-3.14, '-3.14'];
-        yield 'infinity' => [INF, 'INF'];
-        yield 'negative infinity' => [-INF, '-INF'];
-        yield 'nan' => [NAN, 'NAN'];
+        yield 'infinity' => [INF, '\\INF'];
+        yield 'negative infinity' => [-INF, '-\\INF'];
+        yield 'nan' => [NAN, '\\NAN'];
     }
 
     #[DataProvider('stringProvider')]
@@ -91,8 +91,6 @@ final class VarExporterTest extends TestCase
         $code = $this->exporter->export($closure);
         $roundTripped = eval("return {$code};");
 
-        // Round-trip is the real contract; substring asserts would tolerate
-        // mangled output that no longer executes correctly.
         self::assertSame(14, $roundTripped(7));
     }
 
@@ -129,9 +127,6 @@ final class VarExporterTest extends TestCase
         $original = new VarExporter(ExportConfig::compact());
         $pretty = $original->withConfig($prettyConfig);
 
-        // Identity is secondary - the real guarantee is that the two
-        // instances produce different output because the new config is
-        // actually applied to subsequent exports.
         self::assertNotSame($original, $pretty);
         self::assertSame($prettyConfig, $pretty->getConfig());
         self::assertStringNotContainsString("\n", $original->export([1, 2]));
@@ -194,9 +189,6 @@ final class VarExporterTest extends TestCase
         $code = $this->exporter->export($data);
         $evaluated = eval("return {$code};");
 
-        // Structural substring matches would pass even if the closure body
-        // were silently corrupted; we only know the output is correct when
-        // it evaluates and behaves like the original.
         self::assertSame(42, $evaluated['value']);
         self::assertSame(10, $evaluated['handler'](5));
     }
