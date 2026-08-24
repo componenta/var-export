@@ -19,6 +19,7 @@ final readonly class ClosureSourceCandidate
         public string $namespace = '',
         public string $trait = '',
         public string $class = '',
+        public string $function = '',
     ) {
     }
 
@@ -28,6 +29,12 @@ final readonly class ClosureSourceCandidate
         /** @var array{0: Closure|ArrowFunction} $cloned */
         $cloned = $traverser->traverse([$this->node]);
 
-        return new self($cloned[0], $this->namespace, $this->trait, $this->class);
+        return new self(
+            $cloned[0],
+            $this->namespace,
+            $this->trait,
+            $this->class,
+            $this->function,
+        );
     }
 }
