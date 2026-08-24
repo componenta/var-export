@@ -339,8 +339,8 @@ final readonly class ClosureExporter implements ClosureExporterInterface
 
         try {
             $actual = (new ConstExprEvaluator())->evaluateSilently($nodeDefault);
-        } catch (ConstExprEvaluationException) {
-            return false;
+        } catch (ConstExprEvaluationException $e) {
+            throw ClosureExportException::unverifiableParameterDefault($parameter, $e);
         }
 
         return self::sameValue($actual, $parameter->getDefaultValue());
