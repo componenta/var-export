@@ -9,6 +9,22 @@ use Throwable;
 
 final class ClosureExportException extends ExportException
 {
+    public static function namedCallable(ReflectionFunction $reflection): self
+    {
+        $file = $reflection->getFileName() ?: null;
+        $line = $reflection->getStartLine() ?: null;
+
+        return new self(
+            sprintf(
+                'Closure created from named callable "%s" cannot be exported by the anonymous-source closure exporter; use a callable-specific strategy.',
+                $reflection->getName(),
+            ),
+            ['callable' => $reflection->getName()],
+            $file,
+            $line,
+        );
+    }
+
     public static function sourceNotFound(string $filename): self
     {
         return new self(
