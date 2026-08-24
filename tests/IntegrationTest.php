@@ -165,12 +165,6 @@ final class IntegrationTest extends TestCase
 
     public function testMultipleClosuresFromSameFileEachRoundTripIndependently(): void
     {
-        // Previously called "testExporterReusesBenefitsFromCache", but it
-        // never observed cache behavior - it only checked digits appeared
-        // in output. The real guarantee to protect is that exporting
-        // several closures from one file yields correct, independent code
-        // for each one (the cache-hit path is internal and has no
-        // observable side effects to assert on here).
         $exporter = new VarExporter();
 
         $fn1 = static fn(): int => 1;
@@ -192,7 +186,6 @@ final class IntegrationTest extends TestCase
 
         $code = Export::toFile($data);
 
-        // Should be valid PHP that can be written to a file and included
         self::assertStringEndsWith(';', $code);
         self::assertStringStartsWith('[', $code);
     }
@@ -207,9 +200,9 @@ final class IntegrationTest extends TestCase
 
         $code = Export::var($original);
 
-        self::assertStringContainsString('INF', $code);
-        self::assertStringContainsString('-INF', $code);
-        self::assertStringContainsString('NAN', $code);
+        self::assertStringContainsString('\\INF', $code);
+        self::assertStringContainsString('-\\INF', $code);
+        self::assertStringContainsString('\\NAN', $code);
     }
 
     public function testUnicodeStringsExport(): void
@@ -275,7 +268,6 @@ final class IntegrationTest extends TestCase
 
         $code = Export::var($original, $config);
 
-        // Verify order in output string
         $posA = strpos($code, "'a'");
         $posM = strpos($code, "'m'");
         $posZ = strpos($code, "'z'");
@@ -291,7 +283,6 @@ final class IntegrationTest extends TestCase
 
         $code = Export::var($original, $config);
 
-        // Numeric keys should come first
         $pos0 = strpos($code, '0 =>');
         $pos1 = strpos($code, '1 =>');
         $posA = strpos($code, "'a'");
