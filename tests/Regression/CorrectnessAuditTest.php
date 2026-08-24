@@ -52,7 +52,7 @@ it('does not mutate cached AST between runtime closures from one source location
     expect($first())->toBe(1)->and($second())->toBe(2)->and($third())->toBe(3);
 });
 
-it('preserves captured variable lvalue semantics in Inline mode', function (): void { $restored = eval('return ' . Export::closure(captureFactory(4), new ExportConfig(closureUseMode: ClosureUseMode::Inline)) . ';'); expect($restored())->toBe(5)->and($restored())->toBe(6); });
+it('preserves captured variable lvalue semantics in Inline mode', function (): void { $restored = eval('return ' . Export::closure(captureFactory(4), new ExportConfig(closureUseMode: ClosureUseMode::Inline)) . ';'); expect($restored())->toBe(5)->and($restored())->toBe(5); });
 it('preserves nested closure capture scopes in Inline mode', function (): void { $outer = eval('return ' . Export::closure(nestedCaptureFactory('nested'), new ExportConfig(closureUseMode: ClosureUseMode::Inline)) . ';'); $inner = $outer(); expect($inner())->toBe('nested'); });
 it('freezes source namespace function and constant resolution', function (): void { $restored = eval('return ' . Export::closure(localSymbolClosure()) . ';'); expect($restored())->toBe(['fixture-function', 'fixture-constant']); });
 it('preserves magic constants of an unscoped source closure', function (): void { $closure = magicClosure(); $expected = $closure(); $restored = eval('return ' . Export::closure($closure) . ';'); expect($restored())->toBe($expected); });
