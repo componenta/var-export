@@ -23,7 +23,7 @@ VarExport использует **value semantics**. Поддерживаются
 
 - `null`, boolean, integer, float и произвольные byte strings;
 - массивы без PHP references;
-- замыкания с доступным исходным файлом;
+- anonymous source closures и arrow functions с доступным исходным файлом;
 - enum cases;
 - readonly value objects только при явном включении generic readonly export либо через class-specific exporter.
 
@@ -37,7 +37,10 @@ VarExport использует **value semantics**. Поддерживаются
 - generic readonly objects без явного opt-in;
 - readonly classes, состояние которых нельзя доказуемо восстановить через promoted constructor properties;
 - closures, привязанные к `$this`;
-- class-scoped closures, у которых lexical и called class различаются;
+- late-static-binding closures, у которых runtime closure scope и called class различаются;
+- closures, созданные из named callables (`Closure::fromCallable()`);
+- closures со static local variables, чьё живое runtime-состояние нельзя безопасно установить в новом closure;
+- closures с вложенными named-function или class-like declarations, identity которых нельзя надёжно сохранить expression-only экспортом;
 - closures из `eval()` и другого кода без читаемого source file.
 
 При `sortKeys=true` порядок associative array намеренно канонизируется, поэтому такой режим не обещает сохранение исходного iteration order.
@@ -115,7 +118,7 @@ $config = new ExportConfig(
 })()
 ```
 
-Таким образом сохраняются lvalue/write semantics, локальная copy capture и вложенные scopes. `use (&$x)` отклоняется. Captured arrays ограничены `maxDepth` и не могут содержать references.
+Таким образом сохраняются lvalue/write semantics, локальная copy capture и вложенные scopes. `use (&$x)` отклоняется. В `Inline` capture values намеренно ограничены `null`, scalar-значениями и вложенными массивами без references; objects (включая enum instances), resources и nested `Closure` отклоняются. Captured arrays подчиняются тому же глобальному `maxDepth`.
 
 ### `ClosureUseMode::Inline`
 
@@ -127,9 +130,17 @@ Source cache индексирует closures по строке и namespace. В 
 
 Для build/cache артефактов используйте `ClosureExportPolicy::PortableExpression`. Такой режим всегда отклоняет `__FILE__`/`__DIR__`, `include`/`require`, `eval()` и namespace-fallback для unqualified functions/constants вместо создания непереносимого cache. Imported/FQ external functions разрешены, но функции, объявленные в source-файле самого provider, отклоняются: этот файл может не загружаться вместе с cache. Runtime user-defined constants также отклоняются, поскольку их объявление не гарантировано при загрузке артефакта. `SourcePathPolicy::Reject` дополнительно позволяет запретить `__FILE__`/`__DIR__` и в режиме `SourceBound`.
 
-Class-scoped closure поддерживается, если lexical и called class совпадают. Scope восстанавливается через `Closure::bind()`, поэтому `self::`, `parent::`, private/protected access и magic constants сохраняют семантику.
+Class-scoped closure поддерживается, когда runtime closure scope и called class совпадают. Generated expression восстанавливает runtime scope через `Closure::bind()`, а lexical source metadata хранится отдельно для magic constants. Поэтому поддерживается и явный `Closure::bind()` к одному runtime class: `self::`, `parent::` и private/protected access следуют rebound scope, а lexical magic constants сохраняют исходную PHP-семантику.
 
-Closure с `$this` и late-static-binding сценарии с разными lexical/called classes отклоняются, поскольку exact reconstruction не гарантируется.
+Closure с `$this` и late-static-binding сценарии, где Reflection сообщает разные closure-scope и called classes, отклоняются, поскольку такое called-scope состояние нельзя восстановить точно. Closure со static local variables также отклоняются: Reflection показывает их текущее runtime-состояние, но PHP не предоставляет безопасного публичного механизма для установки этого состояния в заново созданное closure.
+
+Parameter defaults также должны быть безопасно сравнимы без выполнения source-кода. Context-dependent defaults, которые parser не может безопасно вычислить (например `new Foo()`), явно отклоняются вместо предположения об эквивалентности.
+
+`ClosureExporter` намеренно работает только с anonymous source closures/arrow functions. `Closure`, созданный из named function/method через `Closure::fromCallable()`, отклоняется; consumer, которому нужны named callables, должен сохранить callable identity своей стратегией и восстановить его явно. Вложенные named-function и class-like declarations также отклоняются, поскольку standalone expression не может надёжно воспроизвести их lexical declaration identity.
+
+### Согласованность source
+
+Экспорт closure основан на исходном файле. Файл на диске должен оставаться той же source revision, из которой был скомпилирован runtime closure. VarExport сравнивает текущий AST с доступными Reflection metadata — location, signature, defaults, capture names и reference mode, — но Reflection не предоставляет hash исходного тела closure. Поэтому **body-only изменение source при неизменных наблюдаемых Reflection metadata невозможно доказуемо обнаружить**. Long-running process/hot reload не должен экспортировать старый runtime closure после замены source-файла: closure следует сначала пересоздать из новой версии. SHA-256 source cache гарантирует актуальность относительно текущего файла, но не идентичность уже созданному runtime closure.
 
 ## Readonly value objects
 
@@ -142,11 +153,11 @@ $config = (new ExportConfig())
     ->withGenericReadonlyObjects();
 ```
 
-В opt-in режиме класс должен быть `readonly` и не anonymous, constructor — public, параметры — public promoted concrete properties без hooks, variadic/by-reference и дополнительного instance state. `__unserialize()` также отклоняется. Generated expression всё равно вызывает constructor при восстановлении, поэтому для framework/cache descriptors предпочтителен class-specific exporter.
+В opt-in режиме класс должен быть user-defined, `readonly` и не anonymous, constructor — public, параметры — public promoted concrete properties без hooks, variadic/by-reference и дополнительного instance state. Internal/extension classes отклоняются и требуют class-specific exporter. `__unserialize()` также отклоняется. Generated expression всё равно вызывает constructor при восстановлении, поэтому для framework/cache descriptors предпочтителен class-specific exporter.
 
 ## Единый recursive dispatcher
 
-При использовании через `VarExporter` все вложенные значения снова проходят через корневой dispatcher. `ArrayExporter` и `ObjectExporter` не выбирают стратегию для nested values самостоятельно. `ExportContext` переносит depth и path, а custom object exporters, передаваемые в `VarExporter`, должны реализовывать `ContextualObjectExporterInterface`. Это принципиальная часть контракта: специальные типы остаются видимыми на любой глубине и не обходятся fallback-экспортёром.
+При использовании через `VarExporter` все вложенные значения снова проходят через корневой dispatcher. `ArrayExporter` и `ObjectExporter` не выбирают стратегию для nested values самостоятельно. `ExportContext` переносит depth и path, а custom object exporters, передаваемые в `VarExporter`, должны реализовывать `ContextualObjectExporterInterface`. Это принципиальная часть контракта: специальные типы остаются видимыми на любой глубине и не обходятся fallback-экспортёром. Переконфигурировать связанный graph следует через `VarExporter::withConfig()`; low-level `withConfig()` у отдельных exporter-ов является standalone composition API и намеренно не сохраняет ранее привязанный root dispatcher.
 
 ## Переиспользование и source cache
 
