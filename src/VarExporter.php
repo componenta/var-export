@@ -93,7 +93,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
         };
     }
 
-    public function exportToFile(mixed $var): string
+    public function exportStatement(mixed $var): string
     {
         return $this->export($var) . ';';
     }
