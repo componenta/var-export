@@ -296,12 +296,21 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
     private function sourceOwnerMatches(ClosureSourceCandidate $candidate, ReflectionFunction $reflection): bool
     {
         $name = $reflection->getName();
-        if ($candidate->class !== '') {
-            return str_contains($name, $candidate->class . '::');
-        }
 
         if ($candidate->function !== '') {
             return str_contains($name, $candidate->function . '()');
+        }
+
+        if ($candidate->method !== '') {
+            if ($candidate->class !== '') {
+                return str_contains($name, $candidate->class . '::' . $candidate->method . '()');
+            }
+
+            return str_contains($name, '::' . $candidate->method . '()');
+        }
+
+        if ($candidate->class !== '') {
+            return str_contains($name, $candidate->class . '::');
         }
 
         return true;
