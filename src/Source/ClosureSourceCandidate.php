@@ -20,6 +20,7 @@ final readonly class ClosureSourceCandidate
         public string $trait = '',
         public string $class = '',
         public string $function = '',
+        public string $method = '',
     ) {
     }
 
@@ -35,6 +36,7 @@ final readonly class ClosureSourceCandidate
             $this->trait,
             $this->class,
             $this->function,
+            $this->method,
         );
     }
 }
