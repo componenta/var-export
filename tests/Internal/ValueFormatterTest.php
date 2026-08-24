@@ -29,7 +29,7 @@ final class ValueFormatterTest extends TestCase
         yield 'positive' => [42, '42'];
         yield 'negative' => [-42, '-42'];
         yield 'large' => [PHP_INT_MAX, (string) PHP_INT_MAX];
-        yield 'small' => [PHP_INT_MIN, (string) PHP_INT_MIN];
+        yield 'small' => [PHP_INT_MIN, var_export(PHP_INT_MIN, true)];
     }
 
     #[DataProvider('floatProvider')]
