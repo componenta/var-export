@@ -87,7 +87,10 @@ final readonly class ArrayExporter implements ArrayExporterInterface
             : $this->formatCompact($array, $keys, $isList, $context);
     }
 
-    /** @param array<mixed> $array @param array<int|string> $keys */
+    /**
+     * @param array<mixed> $array
+     * @param list<int|string> $keys
+     */
     private function formatCompact(array $array, array $keys, bool $isList, ExportContext $context): string
     {
         $items = [];
@@ -103,7 +106,10 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         return '[' . implode(', ', $items) . ']';
     }
 
-    /** @param array<mixed> $array @param array<int|string> $keys */
+    /**
+     * @param array<mixed> $array
+     * @param list<int|string> $keys
+     */
     private function formatPretty(array $array, array $keys, bool $isList, ExportContext $context): string
     {
         $itemIndent = $context->baseIndent . $this->config->indent;
@@ -117,6 +123,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         }
 
         $trailing = $this->config->trailingComma ? ',' : '';
+
         return "[\n" . implode(",\n", $items) . $trailing . "\n{$context->baseIndent}]";
     }
 
@@ -142,8 +149,18 @@ final readonly class ArrayExporter implements ArrayExporterInterface
             is_array($value) => $this->formatArray($value, $context),
             $value instanceof Closure => $this->formatClosure($value, $key, $context),
             is_object($value) => $this->formatObject($value, $key, $context),
-            is_resource($value) => throw ArrayExportException::unexportableElement($key, 'resource (' . get_resource_type($value) . ')', $context->depth, $context->path),
-            default => throw ArrayExportException::unexportableElement($key, get_debug_type($value), $context->depth, $context->path),
+            is_resource($value) => throw ArrayExportException::unexportableElement(
+                $key,
+                'resource (' . get_resource_type($value) . ')',
+                $context->depth,
+                $context->path,
+            ),
+            default => throw ArrayExportException::unexportableElement(
+                $key,
+                get_debug_type($value),
+                $context->depth,
+                $context->path,
+            ),
         };
     }
 
@@ -161,16 +178,28 @@ final readonly class ArrayExporter implements ArrayExporterInterface
     private function formatObject(object $object, int|string $key, ExportContext $context): string
     {
         if ($this->objectExporter === null) {
-            throw ArrayExportException::unexportableElement($key, $object::class, $context->depth, $context->path);
+            throw ArrayExportException::unexportableElement(
+                $key,
+                $object::class,
+                $context->depth,
+                $context->path,
+            );
         }
 
         try {
             if ($this->objectExporter instanceof ContextualObjectExporterInterface) {
                 return $this->objectExporter->exportWithContext($object, $context);
             }
+
             return $this->objectExporter->exportWithDepth($object, $context->depth);
         } catch (Throwable $e) {
-            throw ArrayExportException::unexportableElement($key, $object::class, $context->depth, $context->path, $e);
+            throw ArrayExportException::unexportableElement(
+                $key,
+                $object::class,
+                $context->depth,
+                $context->path,
+                $e,
+            );
         }
     }
 
@@ -179,25 +208,41 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         return is_int($key) ? (string) $key : $this->valueFormatter->escapeString($key);
     }
 
-    /** @param array<mixed> $array @return array<int|string> */
+    /**
+     * @param array<mixed> $array
+     * @return list<int|string>
+     */
     private function orderedKeys(array $array): array
     {
+        /** @var list<int|string> $keys */
         $keys = array_keys($array);
         if (!$this->config->sortKeys) {
             return $keys;
         }
 
         usort($keys, static function (int|string $left, int|string $right): int {
-            if (is_int($left) && is_string($right)) { return -1; }
-            if (is_string($left) && is_int($right)) { return 1; }
-            if (is_int($left)) { /** @var int $right */ return $left <=> $right; }
-            /** @var string $right */ return strcmp($left, $right);
+            if (is_int($left) && is_string($right)) {
+                return -1;
+            }
+            if (is_string($left) && is_int($right)) {
+                return 1;
+            }
+            if (is_int($left)) {
+                /** @var int $right */
+                return $left <=> $right;
+            }
+
+            /** @var string $right */
+            return strcmp($left, $right);
         });
 
         return $keys;
     }
 
-    /** @param array<mixed> $array @param array<int|string> $keyPath */
+    /**
+     * @param array<mixed> $array
+     * @param list<int|string> $keyPath
+     */
     private function assertNotReference(array $array, int|string $key, array $keyPath): void
     {
         if (\ReflectionReference::fromArrayElement($array, $key) !== null) {
