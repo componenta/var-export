@@ -83,12 +83,10 @@ final class ClosureExporterTest extends TestCase
         };
         $exporter = new ClosureExporter(ExportConfig::pretty()->withIndent('  '));
         $code = $exporter->exportWithDepth($closure, 2);
-        $lines = explode("\n", $code);
+        $restored = eval("return {$code};");
 
-        self::assertGreaterThan(1, count($lines));
-        self::assertStringStartsWith('static function', $lines[0]);
-        self::assertSame('      return 42;', $lines[1]);
-        self::assertSame('    }', $lines[array_key_last($lines)]);
+        self::assertStringContainsString("\n      return 42;", $code);
+        self::assertSame(42, $restored());
     }
 
     public function testWithConfigReusesSourceCacheButAppliesNewMode(): void
