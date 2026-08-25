@@ -8,11 +8,13 @@ use Componenta\VarExport\Source\ClosureSourceCandidate;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\PropertyHook;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\Node\Stmt\Property;
 use PhpParser\Node\Stmt\Trait_;
 use PhpParser\NodeVisitorAbstract;
 
@@ -34,7 +36,13 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     /** @var list<string> */
     private array $methodStack = [];
 
-    /** @var list<array{string, string, string, string}> */
+    /** @var list<string> */
+    private array $propertyStack = [];
+
+    /** @var list<string> */
+    private array $propertyHookStack = [];
+
+    /** @var list<array{string, string, string, string, string, string}> */
     private array $functionScopeStack = [];
 
     private string $namespace = '';
@@ -42,6 +50,8 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     private string $class = '';
     private string $function = '';
     private string $method = '';
+    private string $property = '';
+    private string $propertyHook = '';
 
     public function enterNode(Node $node): null
     {
@@ -75,11 +85,34 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
             return null;
         }
 
+        if ($node instanceof Property) {
+            $this->propertyStack[] = $this->property;
+            $this->property = $node->props[0]->name->toString();
+
+            return null;
+        }
+
+        if ($node instanceof PropertyHook) {
+            $this->propertyHookStack[] = $this->propertyHook;
+            $this->propertyHook = $node->name->toString();
+
+            return null;
+        }
+
         if ($node instanceof Function_) {
-            $this->functionScopeStack[] = [$this->class, $this->trait, $this->function, $this->method];
+            $this->functionScopeStack[] = [
+                $this->class,
+                $this->trait,
+                $this->function,
+                $this->method,
+                $this->property,
+                $this->propertyHook,
+            ];
             $this->class = '';
             $this->trait = '';
             $this->method = '';
+            $this->property = '';
+            $this->propertyHook = '';
             $this->function = $this->qualify($node->name->toString());
 
             return null;
@@ -93,6 +126,8 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
                 $this->class,
                 $this->function,
                 $this->method,
+                $this->property,
+                $this->propertyHook,
             );
         }
 
@@ -102,7 +137,18 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function leaveNode(Node $node): null
     {
         if ($node instanceof Function_) {
-            [$this->class, $this->trait, $this->function, $this->method] = array_pop($this->functionScopeStack) ?? ['', '', '', ''];
+            [
+                $this->class,
+                $this->trait,
+                $this->function,
+                $this->method,
+                $this->property,
+                $this->propertyHook,
+            ] = array_pop($this->functionScopeStack) ?? ['', '', '', '', '', ''];
+        } elseif ($node instanceof PropertyHook) {
+            $this->propertyHook = array_pop($this->propertyHookStack) ?? '';
+        } elseif ($node instanceof Property) {
+            $this->property = array_pop($this->propertyStack) ?? '';
         } elseif ($node instanceof ClassMethod) {
             $this->method = array_pop($this->methodStack) ?? '';
         } elseif ($node instanceof Class_ || $node instanceof Enum_) {
