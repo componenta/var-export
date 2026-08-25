@@ -101,6 +101,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
     {
         try {
             $this->export($object);
+
             return true;
         } catch (Throwable) {
             return false;
@@ -109,12 +110,24 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
 
     public function withConfig(ExportConfig $config): static
     {
-        return new self($config, $this->valueFormatter, $this->arrayExporterProvider, $this->closureExporter?->withConfig($config), null);
+        return new self(
+            $config,
+            $this->valueFormatter,
+            $this->arrayExporterProvider,
+            $this->closureExporter?->withConfig($config),
+            null,
+        );
     }
 
     public function withValueExporter(ContextualValueExporterInterface $valueExporter): static
     {
-        return new self($this->config, $this->valueFormatter, $this->arrayExporterProvider, $this->closureExporter, $valueExporter);
+        return new self(
+            $this->config,
+            $this->valueFormatter,
+            $this->arrayExporterProvider,
+            $this->closureExporter,
+            $valueExporter,
+        );
     }
 
     private function exportReadonlyObject(object $object, ExportContext $context): string
@@ -131,7 +144,10 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         foreach ($constructor->getParameters() as $parameter) {
             $property = $reflection->getProperty($parameter->getName());
             $value = $property->getValue($object);
-            $args[] = $this->exportValue($value, $context->child($parameter->getName(), $argumentIndent));
+            $args[] = $this->exportValue(
+                $value,
+                $context->child($parameter->getName(), $argumentIndent),
+            );
         }
 
         $class = '\\' . $reflection->getName();
@@ -141,6 +157,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         if ($this->config->isPretty() && (count($args) > 1 || $this->containsMultilineArgument($args))) {
             return $this->formatPretty($class, $args, $context);
         }
+
         return "new {$class}(" . implode(', ', $args) . ')';
     }
 
@@ -157,21 +174,32 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             throw ExportException::unexportableObject($object);
         }
         if ($reflection->isAnonymous()) {
-            throw new ExportException(sprintf('Anonymous readonly class "%s" cannot be named in generated PHP source.', $reflection->getName()), ['class' => $reflection->getName(), 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Anonymous readonly class "%s" cannot be named in generated PHP source.', $reflection->getName()),
+                ['class' => $reflection->getName(), 'path' => $context->path],
+            );
         }
 
         $constructor = $reflection->getConstructor();
         $properties = $this->instanceProperties($reflection);
         if ($constructor === null) {
             if ($properties !== []) {
-                throw new ExportException(sprintf('Readonly class "%s" has state but no constructor that can reconstruct it at %s.', $reflection->getName(), $context->location()), ['class' => $reflection->getName(), 'path' => $context->path]);
+                throw new ExportException(
+                    sprintf('Readonly class "%s" has state but no constructor that can reconstruct it at %s.', $reflection->getName(), $context->location()),
+                    ['class' => $reflection->getName(), 'path' => $context->path],
+                );
             }
+
             return;
         }
         if (!$constructor->isPublic()) {
-            throw new ExportException(sprintf('Constructor of readonly class "%s" must be public.', $reflection->getName()), ['class' => $reflection->getName(), 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Constructor of readonly class "%s" must be public.', $reflection->getName()),
+                ['class' => $reflection->getName(), 'path' => $context->path],
+            );
         }
 
+        /** @var array<string, true> $parameterNames */
         $parameterNames = [];
         foreach ($constructor->getParameters() as $parameter) {
             $this->assertReconstructableParameter($reflection, $object, $parameter, $context);
@@ -186,11 +214,17 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             }
         }
         if ($reflection->hasMethod('__unserialize')) {
-            throw new ExportException(sprintf('Readonly class "%s" defines __unserialize(); generic constructor reconstruction is not a safe hydration contract.', $reflection->getName()), ['class' => $reflection->getName(), 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Readonly class "%s" defines __unserialize(); generic constructor reconstruction is not a safe hydration contract.', $reflection->getName()),
+                ['class' => $reflection->getName(), 'path' => $context->path],
+            );
         }
     }
 
-    /** @param ReflectionClass<object> $reflection @return list<ReflectionProperty> */
+    /**
+     * @param ReflectionClass<object> $reflection
+     * @return list<ReflectionProperty>
+     */
     private function instanceProperties(ReflectionClass $reflection): array
     {
         $properties = [];
@@ -204,6 +238,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             }
             $class = $class->getParentClass();
         } while ($class !== false);
+
         return $properties;
     }
 
@@ -212,17 +247,29 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
     {
         $name = $parameter->getName();
         if ($parameter->isVariadic() || $parameter->isPassedByReference()) {
-            throw new ExportException(sprintf('Constructor parameter "%s::$%s" cannot be variadic or passed by reference.', $reflection->getName(), $name), ['class' => $reflection->getName(), 'parameter' => $name, 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Constructor parameter "%s::$%s" cannot be variadic or passed by reference.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'parameter' => $name, 'path' => $context->path],
+            );
         }
         if (!$parameter->isPromoted() || !$reflection->hasProperty($name)) {
-            throw new ExportException(sprintf('Constructor parameter "%s::$%s" must be a promoted property.', $reflection->getName(), $name), ['class' => $reflection->getName(), 'parameter' => $name, 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Constructor parameter "%s::$%s" must be a promoted property.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'parameter' => $name, 'path' => $context->path],
+            );
         }
         $property = $reflection->getProperty($name);
         if (!$property->isPublic() || !$property->isPromoted() || $property->isVirtual() || $property->hasHooks()) {
-            throw new ExportException(sprintf('Promoted property "%s::$%s" must be public, concrete, and hook-free.', $reflection->getName(), $name), ['class' => $reflection->getName(), 'property' => $name, 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Promoted property "%s::$%s" must be public, concrete, and hook-free.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'property' => $name, 'path' => $context->path],
+            );
         }
         if (!$property->isInitialized($object)) {
-            throw new ExportException(sprintf('Promoted property "%s::$%s" is not initialized.', $reflection->getName(), $name), ['class' => $reflection->getName(), 'property' => $name, 'path' => $context->path]);
+            throw new ExportException(
+                sprintf('Promoted property "%s::$%s" is not initialized.', $reflection->getName(), $name),
+                ['class' => $reflection->getName(), 'property' => $name, 'path' => $context->path],
+            );
         }
     }
 
@@ -238,6 +285,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         if ($this->valueExporter !== null) {
             return $this->valueExporter->exportValue($value, $context);
         }
+
         return match (true) {
             is_null($value) => $this->valueFormatter->formatNull(),
             is_bool($value) => $this->valueFormatter->formatBool($value),
@@ -256,15 +304,26 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         if ($this->arrayExporterProvider !== null) {
             $arrayExporter = ($this->arrayExporterProvider)();
             if (!$arrayExporter instanceof ArrayExporterInterface) {
-                throw new ExportException(sprintf('ObjectExporter array provider must return %s; got %s.', ArrayExporterInterface::class, get_debug_type($arrayExporter)), ['type' => get_debug_type($arrayExporter), 'path' => $context->path]);
+                throw new ExportException(
+                    sprintf('ObjectExporter array provider must return %s; got %s.', ArrayExporterInterface::class, get_debug_type($arrayExporter)),
+                    ['type' => get_debug_type($arrayExporter), 'path' => $context->path],
+                );
             }
             $arrayExporter = $arrayExporter->withConfig($this->config);
         } else {
-            $arrayExporter = new ArrayExporter($this->config, $this->closureExporter, $this, $this->valueFormatter, $this->valueExporter);
+            $arrayExporter = new ArrayExporter(
+                $this->config,
+                $this->closureExporter,
+                $this,
+                $this->valueFormatter,
+                $this->valueExporter,
+            );
         }
+
         if ($arrayExporter instanceof ArrayExporter) {
             return $arrayExporter->exportWithContext($array, $context);
         }
+
         return $arrayExporter->exportAtDepth($array, $context->depth, $context->baseIndent);
     }
 
@@ -275,6 +334,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
         $itemIndent = $baseIndent . $this->config->indent;
         $trailing = $this->config->trailingComma ? ',' : '';
         $formatted = array_map(static fn(string $argument): string => $itemIndent . $argument, $args);
+
         return "new {$class}(\n" . implode(",\n", $formatted) . $trailing . "\n{$baseIndent})";
     }
 
@@ -286,6 +346,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
                 return true;
             }
         }
+
         return false;
     }
 }
