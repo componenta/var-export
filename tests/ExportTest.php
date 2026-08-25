@@ -59,9 +59,11 @@ final class ExportTest extends TestCase
     {
         $closure = static fn(): int => 42;
         $result = Export::closure($closure);
+        $restored = eval("return {$result};");
 
         self::assertStringContainsString('fn(): int', $result);
-        self::assertSame(42, eval("return {$result};")());
+        self::assertInstanceOf(\Closure::class, $restored);
+        self::assertSame(42, $restored());
     }
 
     public function testConfigIsApplied(): void
