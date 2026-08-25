@@ -9,7 +9,6 @@
     <testsuites>
         <testsuite name="default">
             <directory>tests</directory>
-            <exclude>tests/Regression/ContextPropagationTest.php</exclude>
         </testsuite>
     </testsuites>
     <source>
