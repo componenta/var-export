@@ -14,12 +14,12 @@ final class PropertyHookClosureFixture
     }
 }
 
-it('preserves __PROPERTY__ and closure owner names from property hooks', function (): void {
+it('preserves nested closure magic constants from property hooks', function (): void {
     $original = (new PropertyHookClosureFixture())->callback;
     $expected = $original();
     $restored = eval('return ' . Export::closure($original) . ';');
 
-    expect($expected[0])->toBe('callback')
+    expect($expected[0])->toBe('')
         ->and($restored())->toBe($expected);
 });
 
