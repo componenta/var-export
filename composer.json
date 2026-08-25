@@ -52,7 +52,7 @@
     "scripts": {
         "test": "pest",
         "test-coverage": "pest --coverage --min=90",
-        "mutation": "pest --mutate --everything --covered-only --min=70",
+        "mutation": "pest --mutate --everything --parallel --covered-only --min=70 --compact",
         "phpstan": "phpstan analyse src --level=max",
         "cs-check": "php-cs-fixer fix --dry-run --diff",
         "cs-fix": "php-cs-fixer fix",
