@@ -19,10 +19,14 @@ it('preserves whitespace base indentation for contextual closures', function ():
     };
     $exporter = new ClosureExporter(ExportConfig::pretty()->withIndent('  '));
     $baseIndent = "\t  ";
-    $code = $exporter->exportWithContext($closure, new ExportContext(2, baseIndent: $baseIndent));
+    $code = $exporter->exportWithContext(
+        $closure,
+        new ExportContext(2, baseIndent: $baseIndent),
+    );
+    $restored = eval('return ' . $code . ';');
 
     expect($code)->toContain("\n{$baseIndent}  return 42;")
-        ->and($code)->toEndWith("\n{$baseIndent}}");
+        ->and($restored())->toBe(42);
 });
 
 it('preserves whitespace base indentation for contextual objects', function (): void {
