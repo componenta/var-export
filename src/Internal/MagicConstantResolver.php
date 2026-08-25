@@ -26,7 +26,6 @@ final class MagicConstantResolver extends NodeVisitorAbstract
         string $functionName,
         private readonly string $className = '',
         private readonly string $traitName = '',
-        private readonly string $propertyName = '',
     ) {
         $this->currentFunctionName = $functionName;
     }
@@ -63,7 +62,9 @@ final class MagicConstantResolver extends NodeVisitorAbstract
             $node instanceof MagicConst\Trait_ => new String_($this->traitName),
             $node instanceof MagicConst\Method,
             $node instanceof MagicConst\Function_ => new String_($this->currentFunctionName),
-            $node instanceof MagicConst\Property => new String_($this->propertyName),
+            // __PROPERTY__ belongs to the property-hook body itself. A nested
+            // closure has no property context, so PHP evaluates it as ''.
+            $node instanceof MagicConst\Property => new String_(''),
             default => null,
         };
     }
