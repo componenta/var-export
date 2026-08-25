@@ -500,12 +500,8 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
     /** @return array<string, mixed> */
     private static function closureUsedVariables(ReflectionFunction $reflection): array
     {
-        $variables = [];
-        foreach ($reflection->getClosureUsedVariables() as $name => $value) {
-            if (is_string($name)) {
-                $variables[$name] = $value;
-            }
-        }
+        /** @var array<string, mixed> $variables */
+        $variables = $reflection->getClosureUsedVariables();
 
         return $variables;
     }
