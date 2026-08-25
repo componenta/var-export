@@ -112,7 +112,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                 $this->assertNoByReferenceCapture($node, $reflection);
                 $node = $this->inliner->inline(
                     $node,
-                    $reflection->getClosureUsedVariables(),
+                    self::closureUsedVariables($reflection),
                     $this->config->maxDepth,
                     captureDepth: $context->depth + 1,
                     filename: $reflection->getFileName() ?: null,
@@ -121,7 +121,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             }
 
             $node = $this->isolateUnboundClosure($node, $sourceNode, $reflection);
-            $node = $this->restoreClassScope($node, $reflection);
+            $node = $this->restoreRuntimeScope($node, $reflection);
             $code = $this->printer->prettyPrintExpr($node);
 
             return $this->config->isPretty()
@@ -228,7 +228,11 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
         foreach ($parameters as $index => $parameter) {
             $nodeParameter = $node->params[$index];
-            if (!is_string($nodeParameter->var->name) || $nodeParameter->var->name !== $parameter->getName()) {
+            if (
+                !$nodeParameter->var instanceof Variable
+                || !is_string($nodeParameter->var->name)
+                || $nodeParameter->var->name !== $parameter->getName()
+            ) {
                 return false;
             }
 
@@ -258,7 +262,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         }
 
         if ($node instanceof ClosureNode) {
-            $usedVariables = $reflection->getClosureUsedVariables();
+            $usedVariables = self::closureUsedVariables($reflection);
             $useNames = [];
             foreach ($node->uses as $use) {
                 if (!is_string($use->var->name)) {
@@ -371,7 +375,11 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
         if ($type instanceof ReflectionNamedType) {
             $descriptor = 'named:' . strtolower(ltrim($type->getName(), '\\'));
-            if ($type->allowsNull() && strtolower($type->getName()) !== 'null' && strtolower($type->getName()) !== 'mixed') {
+            if (
+                $type->allowsNull()
+                && strtolower($type->getName()) !== 'null'
+                && strtolower($type->getName()) !== 'mixed'
+            ) {
                 return self::compositeTypeDescriptor('union', [$descriptor, 'named:null']);
             }
 
@@ -381,21 +389,27 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         if ($type instanceof ReflectionUnionType) {
             return self::compositeTypeDescriptor(
                 'union',
-                array_map(fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member), $type->getTypes()),
+                array_map(
+                    fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member),
+                    $type->getTypes(),
+                ),
             );
         }
 
         if ($type instanceof ReflectionIntersectionType) {
             return self::compositeTypeDescriptor(
                 'intersection',
-                array_map(fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member), $type->getTypes()),
+                array_map(
+                    fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member),
+                    $type->getTypes(),
+                ),
             );
         }
 
         return 'reflection:' . (string) $type;
     }
 
-    /** @param list<string> $members */
+    /** @param array<string> $members */
     private static function compositeTypeDescriptor(string $kind, array $members): string
     {
         sort($members, SORT_STRING);
@@ -440,7 +454,11 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             return array_values(array_unique($names));
         }
 
-        if ($expression instanceof ClassConstFetch && $expression->class instanceof Name && $expression->name instanceof Identifier) {
+        if (
+            $expression instanceof ClassConstFetch
+            && $expression->class instanceof Name
+            && $expression->name instanceof Identifier
+        ) {
             return [$expression->class->toString() . '::' . $expression->name->toString()];
         }
 
@@ -479,6 +497,19 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         return $left === $right;
     }
 
+    /** @return array<string, mixed> */
+    private static function closureUsedVariables(ReflectionFunction $reflection): array
+    {
+        $variables = [];
+        foreach ($reflection->getClosureUsedVariables() as $name => $value) {
+            if (is_string($name)) {
+                $variables[$name] = $value;
+            }
+        }
+
+        return $variables;
+    }
+
     private function resolveMagicConstants(
         ClosureNode|ArrowFunction $node,
         ClosureSourceCandidate $candidate,
@@ -502,7 +533,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
     {
         $staticLocals = array_diff_key(
             $reflection->getStaticVariables(),
-            $reflection->getClosureUsedVariables(),
+            self::closureUsedVariables($reflection),
         );
         if ($staticLocals === []) {
             return;
@@ -564,7 +595,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
         if (
             $this->config->closureUseMode === ClosureUseMode::Inline
-            && $reflection->getClosureUsedVariables() !== []
+            && self::closureUsedVariables($reflection) !== []
         ) {
             return $node;
         }
@@ -583,7 +614,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                     );
                 }
             } else {
-                foreach (array_keys($reflection->getClosureUsedVariables()) as $name) {
+                foreach (array_keys(self::closureUsedVariables($reflection)) as $name) {
                     $uses[] = new ClosureUse(new Variable($name));
                 }
             }
@@ -596,20 +627,23 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         ]));
     }
 
-    private function restoreClassScope(Node\Expr $node, ReflectionFunction $reflection): Node\Expr
+    private function restoreRuntimeScope(Node\Expr $node, ReflectionFunction $reflection): Node\Expr
     {
         $scope = $reflection->getClosureScopeClass();
-        if ($scope === null) {
-            return $node;
-        }
+        $scopeArgument = $scope === null
+            ? new ConstFetch(new Name('null'))
+            : new ClassConstFetch(
+                new FullyQualified($scope->getName()),
+                new Identifier('class'),
+            );
 
         return new StaticCall(
             new FullyQualified(Closure::class),
             new Identifier('bind'),
             [
                 new Node\Arg($node),
-                new Node\Arg(new ConstFetch(new FullyQualified('null'))),
-                new Node\Arg(new ClassConstFetch(new FullyQualified($scope->getName()), new Identifier('class'))),
+                new Node\Arg(new ConstFetch(new Name('null'))),
+                new Node\Arg($scopeArgument),
             ],
         );
     }
