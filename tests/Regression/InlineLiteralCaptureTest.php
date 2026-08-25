@@ -15,8 +15,8 @@ it('emits null and boolean Inline captures as PHP literals', function (): void {
     $code = Export::closure($closure, $config);
     $restored = eval('return ' . $code . ';');
 
-    expect($code)->not->toContain('\\null')
-        ->not->toContain('\\true')
-        ->not->toContain('\\false')
+    expect($code)->toContain('$null = null;')
+        ->and($code)->toContain('$true = true;')
+        ->and($code)->toContain('$false = false;')
         ->and($restored())->toBe([null, true, false]);
 });
