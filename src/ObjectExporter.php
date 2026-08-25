@@ -85,7 +85,7 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             );
         }
 
-        if ($context->activeObjects->contains($object)) {
+        if ($context->activeObjects->offsetExists($object)) {
             throw ExportException::objectCycle($object::class, $context->depth);
         }
 
