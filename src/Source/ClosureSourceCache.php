@@ -8,6 +8,7 @@ use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
 use Componenta\VarExport\Exception\ConfigurationException;
 use Componenta\VarExport\Internal\ClosureIndexingVisitor;
+use Componenta\VarExport\Internal\WarningGuard;
 use PhpParser\Node\Stmt;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
@@ -59,21 +60,8 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
         }
 
         $path = self::canonicalPath($filename);
-        $source = @file_get_contents($path);
-
-        if ($source === false) {
-            if (!file_exists($path)) {
-                throw ClosureExportException::sourceNotFound($path);
-            }
-
-            throw ClosureExportException::sourceUnreadable($path);
-        }
-
+        $source = $this->readSource($path);
         $sourceBytes = strlen($source);
-        if ($sourceBytes > $this->maxSourceBytes) {
-            throw ClosureExportException::sourceTooLarge($path, $sourceBytes, $this->maxSourceBytes);
-        }
-
         $hash = hash('sha256', $source);
         $entry = $this->cache[$path] ?? null;
 
@@ -105,6 +93,44 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
     public function size(): int
     {
         return count($this->cache);
+    }
+
+    private function readSource(string $path): string
+    {
+        $stream = WarningGuard::run(static fn() => fopen($path, 'rb'));
+        if (!is_resource($stream)) {
+            if (!file_exists($path)) {
+                throw ClosureExportException::sourceNotFound($path);
+            }
+
+            throw ClosureExportException::sourceUnreadable($path);
+        }
+
+        try {
+            $readLimit = $this->maxSourceBytes === PHP_INT_MAX
+                ? PHP_INT_MAX
+                : $this->maxSourceBytes + 1;
+            $source = WarningGuard::run(
+                static fn(): string|false => stream_get_contents($stream, $readLimit),
+            );
+        } finally {
+            WarningGuard::run(static fn(): bool => fclose($stream));
+        }
+
+        if ($source === false) {
+            throw ClosureExportException::sourceUnreadable($path);
+        }
+
+        $sourceBytes = strlen($source);
+        if ($sourceBytes > $this->maxSourceBytes) {
+            throw ClosureExportException::sourceTooLarge(
+                $path,
+                $sourceBytes,
+                $this->maxSourceBytes,
+            );
+        }
+
+        return $source;
     }
 
     /**
