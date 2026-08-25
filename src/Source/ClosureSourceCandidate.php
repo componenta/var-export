@@ -21,8 +21,6 @@ final readonly class ClosureSourceCandidate
         public string $class = '',
         public string $function = '',
         public string $method = '',
-        public string $property = '',
-        public string $propertyHook = '',
     ) {
     }
 
@@ -39,8 +37,6 @@ final readonly class ClosureSourceCandidate
             $this->class,
             $this->function,
             $this->method,
-            $this->property,
-            $this->propertyHook,
         );
     }
 }
