@@ -89,11 +89,11 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
             throw ExportException::objectCycle($object::class, $context->depth);
         }
 
-        $context->activeObjects->attach($object);
+        $context->activeObjects->offsetSet($object);
         try {
             return $this->exportReadonlyObject($object, $context);
         } finally {
-            $context->activeObjects->detach($object);
+            $context->activeObjects->offsetUnset($object);
         }
     }
 
