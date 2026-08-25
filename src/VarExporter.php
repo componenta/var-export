@@ -21,7 +21,7 @@ use Componenta\VarExport\Source\ClosureSourceCache;
 final readonly class VarExporter implements VarExporterInterface, ContextualValueExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
-    private ArrayExporterInterface $arrayExporter;
+    private ArrayExporter $arrayExporter;
     private ContextualClosureExporterInterface $closureExporter;
     private ContextualObjectExporterInterface $objectExporter;
     private ClosureSourceCacheInterface $sourceCache;
@@ -80,9 +80,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
             is_bool($value) => $this->valueFormatter->formatBool($value),
             is_int($value), is_float($value) => $this->valueFormatter->formatNumeric($value),
             is_string($value) => $this->valueFormatter->escapeString($value),
-            is_array($value) => $this->arrayExporter instanceof ArrayExporter
-                ? $this->arrayExporter->exportWithContext($value, $context)
-                : $this->arrayExporter->exportAtDepth($value, $context->depth, $context->baseIndent),
+            is_array($value) => $this->arrayExporter->exportWithContext($value, $context),
             $value instanceof Closure => $this->closureExporter->exportWithContext($value, $context),
             is_object($value) => $this->objectExporter->exportWithContext($value, $context),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
