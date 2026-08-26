@@ -107,3 +107,51 @@ it('rejects changed parameter attributes after the runtime closure was created',
         @unlink($file);
     }
 });
+
+it('rejects changed safe closure attribute arguments after the runtime closure was created', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_closure_attribute_argument_' . bin2hex(random_bytes(6)) . '.php';
+    $attribute = 'ComponentaClosureArgAttr' . bin2hex(random_bytes(5));
+
+    try {
+        file_put_contents(
+            $file,
+            "<?php #[\\Attribute(\\Attribute::TARGET_FUNCTION)] class {$attribute} { public function __construct(public int \$value) {} } return #[{$attribute}(1)] static fn(): int => 1;",
+        );
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents(
+            $file,
+            "<?php #[\\Attribute(\\Attribute::TARGET_FUNCTION)] class {$attribute} { public function __construct(public int \$value) {} } return #[{$attribute}(2)] static fn(): int => 1;",
+        );
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});
+
+it('rejects changed safe parameter attribute arguments after the runtime closure was created', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_parameter_attribute_argument_' . bin2hex(random_bytes(6)) . '.php';
+    $attribute = 'ComponentaParameterArgAttr' . bin2hex(random_bytes(5));
+
+    try {
+        file_put_contents(
+            $file,
+            "<?php #[\\Attribute(\\Attribute::TARGET_PARAMETER)] class {$attribute} { public function __construct(public int \$value) {} } return static fn(#[{$attribute}(1)] int \$value): int => \$value;",
+        );
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents(
+            $file,
+            "<?php #[\\Attribute(\\Attribute::TARGET_PARAMETER)] class {$attribute} { public function __construct(public int \$value) {} } return static fn(#[{$attribute}(2)] int \$value): int => \$value;",
+        );
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});
