@@ -20,7 +20,7 @@ use Componenta\VarExport\VarExporter;
 use ReflectionClass;
 use RuntimeException;
 
-final class CoverageLegacyClosureExporter implements ClosureExporterInterface
+class CoverageLegacyClosureExporter implements ClosureExporterInterface
 {
     /** @var list<int> */
     public array $depths = [];
@@ -39,7 +39,7 @@ final class CoverageLegacyClosureExporter implements ClosureExporterInterface
 
     public function withConfig(ExportConfig $config): static
     {
-        return new self();
+        return new static();
     }
 }
 
@@ -56,7 +56,7 @@ final class CoverageContextualClosureExporter extends CoverageLegacyClosureExpor
     }
 }
 
-final class CoverageLegacyObjectExporter implements ObjectExporterInterface
+class CoverageLegacyObjectExporter implements ObjectExporterInterface
 {
     /** @var list<int> */
     public array $depths = [];
@@ -80,7 +80,7 @@ final class CoverageLegacyObjectExporter implements ObjectExporterInterface
 
     public function withConfig(ExportConfig $config): static
     {
-        return new self();
+        return new static();
     }
 }
 
@@ -237,7 +237,7 @@ it('covers ArrayExporter scalar, legacy, contextual and failure branches', funct
     $contextualCode = (new ArrayExporter(closureExporter: $contextualClosure))
         ->export(['closure' => static fn(): int => 2]);
     expect($contextualCode)->toContain('static fn');
-    expect($contextualClosure->locations)->toBe(["$value['closure']"]);
+    expect($contextualClosure->locations)->toBe(["\$value['closure']"]);
 
     $enumCode = (new ArrayExporter(objectExporter: new ObjectExporter()))
         ->export(['enum' => CoverageEnum::Ready]);
@@ -272,11 +272,11 @@ it('covers ArrayExporter contextual value dispatch and direct depth guard', func
     $exporter = new ArrayExporter(valueExporter: $values);
 
     expect($exporter->export(['a' => 1, 'b' => false]))->toBe("['a' => 1, 'b' => false]");
-    expect($values->locations)->toBe(["$value['a']", "$value['b']"]);
+    expect($values->locations)->toBe(["\$value['a']", "\$value['b']"]);
 
     expect(fn() => $exporter->exportWithContext(
         [1],
-        new ExportContext(5, baseIndent: '', path: ['deep']),
+        new ExportContext(5, path: ['deep']),
     ))->toThrow(ArrayExportException::class, 'Maximum nesting depth');
 });
 
@@ -287,7 +287,7 @@ it('covers ExportContext construction, propagation and location formatting', fun
     $child = $root->child('items', '  ')->child(3, '    ');
     expect($child->depth)->toBe(2)
         ->and($child->baseIndent)->toBe('    ')
-        ->and($child->location())->toBe("$value['items'][3]")
+        ->and($child->location())->toBe("\$value['items'][3]")
         ->and($child->activeObjects)->toBe($root->activeObjects);
 
     $reindented = $child->withBaseIndent("\t");
@@ -375,7 +375,7 @@ it('covers ObjectExporter closure, resource, provider and formatting branches', 
     $valueExporter = new CoverageValueExporter();
     $customValues = (new ObjectExporter($config))->withValueExporter($valueExporter);
     expect($customValues->export(new CoverageSingleValue('x')))->toContain("'x'");
-    expect($valueExporter->locations)->toBe(["$value['value']"]);
+    expect($valueExporter->locations)->toBe(["\$value['value']"]);
 });
 
 it('covers VarExporter getters, depth and unsupported values', function (): void {
