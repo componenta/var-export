@@ -352,19 +352,93 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
      */
     private function attributesMatch(array $nodeGroups, array $reflectionAttributes): bool
     {
-        $nodeNames = [];
+        $nodeAttributes = [];
         foreach ($nodeGroups as $group) {
             foreach ($group->attrs as $attribute) {
-                $nodeNames[] = ltrim($attribute->name->toString(), '\\');
+                $nodeAttributes[] = $attribute;
             }
         }
 
-        $reflectionNames = [];
-        foreach ($reflectionAttributes as $attribute) {
-            $reflectionNames[] = ltrim($attribute->getName(), '\\');
+        if (count($nodeAttributes) !== count($reflectionAttributes)) {
+            return false;
         }
 
-        return $nodeNames === $reflectionNames;
+        foreach ($nodeAttributes as $index => $nodeAttribute) {
+            $reflectionAttribute = $reflectionAttributes[$index];
+            if (
+                ltrim($nodeAttribute->name->toString(), '\\')
+                !== ltrim($reflectionAttribute->getName(), '\\')
+            ) {
+                return false;
+            }
+
+            $reflectionArgumentSyntax = self::reflectionAttributeArgumentSyntax($reflectionAttribute);
+            if (count($nodeAttribute->args) !== count($reflectionArgumentSyntax)) {
+                return false;
+            }
+
+            if ($nodeAttribute->args === [] || self::reflectionArgumentsMayExecute($reflectionArgumentSyntax)) {
+                continue;
+            }
+
+            $nodeArguments = [];
+            try {
+                foreach ($nodeAttribute->args as $argumentIndex => $argument) {
+                    $key = $argument->name?->toString() ?? $argumentIndex;
+                    $nodeArguments[$key] = (new ConstExprEvaluator())->evaluateSilently($argument->value);
+                }
+            } catch (ConstExprEvaluationException) {
+                // Some constant expressions (for example class constants) cannot be evaluated safely
+                // from the parsed source. Keep matching them by attribute name/count instead of executing code.
+                continue;
+            }
+
+            if (!self::sameValue($nodeArguments, $reflectionAttribute->getArguments())) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param \ReflectionAttribute<object> $attribute
+     * @return list<string>
+     */
+    private static function reflectionAttributeArgumentSyntax(\ReflectionAttribute $attribute): array
+    {
+        $matches = [];
+        if (preg_match_all('/^\s*Argument #\d+ \[ (.*) \]$/m', (string) $attribute, $matches) === false) {
+            return [];
+        }
+
+        /** @var list<string> $arguments */
+        $arguments = $matches[1] ?? [];
+
+        return $arguments;
+    }
+
+    /** @param list<string> $arguments */
+    private static function reflectionArgumentsMayExecute(array $arguments): bool
+    {
+        foreach ($arguments as $argument) {
+            if (self::reflectionExpressionMayExecute($argument)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function reflectionExpressionMayExecute(string $expression): bool
+    {
+        foreach (\PhpToken::tokenize('<?php ' . $expression) as $token) {
+            if ($token->is([T_NEW, T_DOUBLE_COLON])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function nodeIsGenerator(ClosureNode|ArrowFunction $node): bool
@@ -603,6 +677,14 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             );
         }
 
+        $reflectionDefault = self::reflectionParameterDefaultSyntax($parameter);
+        if ($reflectionDefault === null || self::reflectionExpressionMayExecute($reflectionDefault)) {
+            throw ClosureExportException::unverifiableParameterDefault(
+                $parameter,
+                new \RuntimeException('Reading the runtime default value may execute or autoload user code.'),
+            );
+        }
+
         try {
             $actual = (new ConstExprEvaluator())->evaluateSilently($nodeDefault);
         } catch (ConstExprEvaluationException $e) {
@@ -610,6 +692,24 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         }
 
         return self::sameValue($actual, $parameter->getDefaultValue());
+    }
+
+    private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
+    {
+        $signature = (string) $parameter;
+        $marker = ' = ';
+        $start = strpos($signature, $marker);
+        $end = strrpos($signature, ' ]');
+        if ($start === false || $end === false) {
+            return null;
+        }
+
+        $start += strlen($marker);
+        if ($end < $start) {
+            return null;
+        }
+
+        return substr($signature, $start, $end - $start);
     }
 
     /** @return list<string> */
