@@ -30,7 +30,7 @@ function coverageSourceLocalFunction(): int
 it('covers portability analyzer name-resolution and runtime-symbol branches', function (): void {
     $sourceBound = new ClosurePortabilityAnalyzer(
         ClosureExportPolicy::SourceBound,
-        SourcePathPolicy::Allow,
+        SourcePathPolicy::AbsoluteBuildPath,
         __FILE__,
         __LINE__,
         '{closure:' . __FILE__ . ':1}',
@@ -39,7 +39,7 @@ it('covers portability analyzer name-resolution and runtime-symbol branches', fu
 
     $portable = new ClosurePortabilityAnalyzer(
         ClosureExportPolicy::PortableExpression,
-        SourcePathPolicy::Allow,
+        SourcePathPolicy::AbsoluteBuildPath,
         __FILE__,
         __LINE__,
     );
