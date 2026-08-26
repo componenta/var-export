@@ -413,7 +413,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         }
 
         /** @var list<string> $arguments */
-        $arguments = $matches[1] ?? [];
+        $arguments = $matches[1];
 
         return $arguments;
     }
