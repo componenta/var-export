@@ -132,7 +132,7 @@ it('covers structured export exception factories and source metadata', function 
     expect(ExportException::resourceNotExportable($resource)->getMessage())->toContain('stream');
     fclose($resource);
     expect(ExportException::resourceNotExportable($resource)->getMessage())->toContain('closed resource');
-    expect(ExportException::resourceNotNotExportable(new \stdClass())->getMessage())->toContain('stdClass');
+    expect(ExportException::resourceNotExportable(new \stdClass())->getMessage())->toContain('stdClass');
     expect(ExportException::objectCycle(\stdClass::class, 4)->context['depth'])->toBe(4);
     expect(ExportException::formatKeyPath([]))->toBe('root');
     expect(ExportException::formatKeyPath(['a', 2]))->toBe("\$array['a'][2]");
