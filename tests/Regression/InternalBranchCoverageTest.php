@@ -132,12 +132,12 @@ it('covers structured export exception factories and source metadata', function 
     expect(ExportException::resourceNotExportable($resource)->getMessage())->toContain('stream');
     fclose($resource);
     expect(ExportException::resourceNotExportable($resource)->getMessage())->toContain('closed resource');
-    expect(ExportException::resourceNotExportable(new \stdClass())->getMessage())->toContain('stdClass');
+    expect(ExportException::resourceNotNotExportable(new \stdClass())->getMessage())->toContain('stdClass');
     expect(ExportException::objectCycle(\stdClass::class, 4)->context['depth'])->toBe(4);
     expect(ExportException::formatKeyPath([]))->toBe('root');
-    expect(ExportException::formatKeyPath(['a', 2]))->toBe("$array['a'][2]");
+    expect(ExportException::formatKeyPath(['a', 2]))->toBe("\$array['a'][2]");
 
-    expect(ArrayExportException::maxDepthExceeded(1, 2, ['a'])->getMessage())->toContain("$array['a']");
+    expect(ArrayExportException::maxDepthExceeded(1, 2, ['a'])->getMessage())->toContain("\$array['a']");
     expect(ArrayExportException::unexportableElement('a', 'resource', 2, ['a'], $previous)->getPrevious())->toBe($previous);
     expect(ArrayExportException::referencedElement('a', ['a'])->context['key'])->toBe('a');
     expect(ArrayExportException::closureExporterMissing('a', 1, ['a'])->context['depth'])->toBe(1);
@@ -166,7 +166,7 @@ it('covers closure exception factories including capture paths and reflection me
     expect(ClosureExportException::nestingDepthExceeded(1, 2)->context['depth'])->toBe(2);
     expect(ClosureExportException::nonPortableExpression('reason')->context['reason'])->toBe('reason');
     expect(ClosureExportException::cannotInlineUseVariables(['x' => 'by reference'])->getMessage())->toContain('$x');
-    expect(ClosureExportException::captureValueNotExportable('x', 'object', [0, 'a'])->getMessage())->toContain("$capture[0]['a']");
+    expect(ClosureExportException::captureValueNotExportable('x', 'object', [0, 'a'])->getMessage())->toContain("\$capture[0]['a']");
     expect(ClosureExportException::captureValueNotExportable('x', 'object', [])->getMessage())->toContain('capture root');
     expect(ClosureExportException::captureDepthExceeded('x', 1, 2, ['a'])->context['max_depth'])->toBe(1);
     expect(ClosureExportException::internalFailure($reflection, $previous)->getPrevious())->toBe($previous);
