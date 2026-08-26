@@ -269,7 +269,7 @@ it('covers ArrayExporter scalar, legacy, contextual and failure branches', funct
 
 it('covers ArrayExporter contextual value dispatch and direct depth guard', function (): void {
     $values = new CoverageValueExporter();
-    $exporter = new ArrayExporter(valueExporter: $values);
+    $exporter = new ArrayExporter(new ExportConfig(maxDepth: 4), valueExporter: $values);
 
     expect($exporter->export(['a' => 1, 'b' => false]))->toBe("['a' => 1, 'b' => false]");
     expect($values->locations)->toBe(["\$value['a']", "\$value['b']"]);
