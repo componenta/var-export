@@ -218,6 +218,18 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             return false;
         }
 
+        if ($this->nodeIsGenerator($node) !== $reflection->isGenerator()) {
+            return false;
+        }
+
+        if ($this->ownScopeContains($node, Node\Stmt\Static_::class)) {
+            return false;
+        }
+
+        if (!$this->attributesMatch($node->attrGroups, $reflection->getAttributes())) {
+            return false;
+        }
+
         $parameters = $reflection->getParameters();
         if (count($node->params) !== count($parameters)) {
             return false;
@@ -241,6 +253,10 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             }
 
             if ($nodeParameter->variadic !== $parameter->isVariadic()) {
+                return false;
+            }
+
+            if (!$this->attributesMatch($nodeParameter->attrGroups, $parameter->getAttributes())) {
                 return false;
             }
 
@@ -280,6 +296,8 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             if ($useNames !== array_keys($usedVariables)) {
                 return false;
             }
+        } elseif ($this->arrowUsedVariableNames($node) !== array_keys(self::closureUsedVariables($reflection))) {
+            return false;
         }
 
         foreach ($defaults as [$nodeDefault, $parameter]) {
@@ -302,30 +320,183 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         $name = $reflection->getName();
 
         if ($candidate->function !== '') {
-            return str_contains($name, $candidate->function . '()');
+            return str_starts_with($name, '{closure:' . $candidate->function . '():');
         }
 
         if ($candidate->trait !== '') {
             if ($candidate->method !== '') {
-                return str_contains($name, $candidate->trait . '::' . $candidate->method . '()');
+                return str_starts_with($name, '{closure:' . $candidate->trait . '::' . $candidate->method . '():');
             }
 
-            return str_contains($name, $candidate->trait . '::');
+            return str_starts_with($name, '{closure:' . $candidate->trait . '::');
         }
 
         if ($candidate->method !== '') {
             if ($candidate->class !== '') {
-                return str_contains($name, $candidate->class . '::' . $candidate->method . '()');
+                return str_starts_with($name, '{closure:' . $candidate->class . '::' . $candidate->method . '():');
             }
 
-            return str_contains($name, '::' . $candidate->method . '()');
+            return str_contains($name, '::' . $candidate->method . '():');
         }
 
         if ($candidate->class !== '') {
-            return str_contains($name, $candidate->class . '::');
+            return str_starts_with($name, '{closure:' . $candidate->class . '::');
         }
 
         return true;
+    }
+
+    /**
+     * @param list<Node\AttributeGroup> $nodeGroups
+     * @param list<\ReflectionAttribute<object>> $reflectionAttributes
+     */
+    private function attributesMatch(array $nodeGroups, array $reflectionAttributes): bool
+    {
+        $nodeNames = [];
+        foreach ($nodeGroups as $group) {
+            foreach ($group->attrs as $attribute) {
+                $nodeNames[] = ltrim($attribute->name->toString(), '\\');
+            }
+        }
+
+        $reflectionNames = [];
+        foreach ($reflectionAttributes as $attribute) {
+            $reflectionNames[] = ltrim($attribute->getName(), '\\');
+        }
+
+        return $nodeNames === $reflectionNames;
+    }
+
+    private function nodeIsGenerator(ClosureNode|ArrowFunction $node): bool
+    {
+        return $this->ownScopeContains($node, Node\Expr\Yield_::class)
+            || $this->ownScopeContains($node, Node\Expr\YieldFrom::class);
+    }
+
+    /** @param class-string<Node> $nodeClass */
+    private function ownScopeContains(Node $node, string $nodeClass): bool
+    {
+        foreach ($node->getSubNodeNames() as $subNodeName) {
+            $value = $node->{$subNodeName};
+            if ($value instanceof Node) {
+                if ($this->ownScopeChildContains($value, $nodeClass)) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (!is_array($value)) {
+                continue;
+            }
+
+            foreach ($value as $child) {
+                if ($child instanceof Node && $this->ownScopeChildContains($child, $nodeClass)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** @param class-string<Node> $nodeClass */
+    private function ownScopeChildContains(Node $node, string $nodeClass): bool
+    {
+        if ($node instanceof $nodeClass) {
+            return true;
+        }
+
+        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike) {
+            return false;
+        }
+
+        return $this->ownScopeContains($node, $nodeClass);
+    }
+
+    /** @return list<string> */
+    private function arrowUsedVariableNames(ArrowFunction $node): array
+    {
+        /** @var array<string, true> $names */
+        $names = [];
+        $this->collectArrowUsedVariableNames($node->expr, $names);
+
+        foreach ($node->params as $parameter) {
+            if ($parameter->var instanceof Variable && is_string($parameter->var->name)) {
+                unset($names[$parameter->var->name]);
+            }
+        }
+
+        foreach ([
+            'this',
+            'GLOBALS',
+            '_SERVER',
+            '_GET',
+            '_POST',
+            '_FILES',
+            '_COOKIE',
+            '_SESSION',
+            '_REQUEST',
+            '_ENV',
+        ] as $name) {
+            unset($names[$name]);
+        }
+
+        return array_keys($names);
+    }
+
+    /** @param array<string, true> $names */
+    private function collectArrowUsedVariableNames(Node $node, array &$names): void
+    {
+        if ($node instanceof Variable) {
+            if (is_string($node->name)) {
+                $names[$node->name] = true;
+            } elseif ($node->name instanceof Node) {
+                $this->collectArrowUsedVariableNames($node->name, $names);
+            }
+
+            return;
+        }
+
+        if ($node instanceof ClosureNode) {
+            foreach ($node->uses as $use) {
+                if (is_string($use->var->name)) {
+                    $names[$use->var->name] = true;
+                }
+            }
+
+            return;
+        }
+
+        if ($node instanceof ArrowFunction) {
+            foreach ($this->arrowUsedVariableNames($node) as $name) {
+                $names[$name] = true;
+            }
+
+            return;
+        }
+
+        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike) {
+            return;
+        }
+
+        foreach ($node->getSubNodeNames() as $subNodeName) {
+            $value = $node->{$subNodeName};
+            if ($value instanceof Node) {
+                $this->collectArrowUsedVariableNames($value, $names);
+                continue;
+            }
+
+            if (!is_array($value)) {
+                continue;
+            }
+
+            foreach ($value as $child) {
+                if ($child instanceof Node) {
+                    $this->collectArrowUsedVariableNames($child, $names);
+                }
+            }
+        }
     }
 
     private function typesMatch(?Node $nodeType, ?ReflectionType $reflectionType): bool
