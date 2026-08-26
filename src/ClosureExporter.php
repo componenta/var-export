@@ -347,7 +347,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
     }
 
     /**
-     * @param list<Node\AttributeGroup> $nodeGroups
+     * @param array<array-key, Node\AttributeGroup> $nodeGroups
      * @param list<\ReflectionAttribute<object>> $reflectionAttributes
      */
     private function attributesMatch(array $nodeGroups, array $reflectionAttributes): bool
