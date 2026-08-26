@@ -25,6 +25,26 @@ it('rejects a class owner changed on disk after the runtime closure was created'
     }
 });
 
+it('rejects class owners whose names only match as a suffix', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_class_owner_suffix_' . bin2hex(random_bytes(6)) . '.php';
+    $suffix = bin2hex(random_bytes(5));
+    $staleOwner = 'Owner' . $suffix;
+    $runtimeOwner = 'B' . $staleOwner;
+
+    try {
+        file_put_contents($file, "<?php class {$runtimeOwner} { public static function make(): \\Closure { return static fn(): string => __CLASS__; } } return {$runtimeOwner}::make();");
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents($file, "<?php class {$staleOwner} { public static function make(): \\Closure { return static fn(): string => __CLASS__; } } return {$staleOwner}::make();");
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});
+
 it('rejects a method owner changed on disk after the runtime closure was created', function (): void {
     $file = sys_get_temp_dir() . '/componenta_method_owner_' . bin2hex(random_bytes(6)) . '.php';
     $suffix = bin2hex(random_bytes(5));
