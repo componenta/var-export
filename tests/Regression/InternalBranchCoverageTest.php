@@ -22,6 +22,11 @@ use PhpParser\Node\Scalar\MagicConst\File;
 use ReflectionFunction;
 use RuntimeException;
 
+enum InternalCoverageEnum
+{
+    case Ready;
+}
+
 function coverageSourceLocalFunction(): int
 {
     return 1;
@@ -93,7 +98,7 @@ it('covers capture literal generation and unsupported capture diagnostics', func
     expect(UseVariableValueNodeFactory::fromValue(-INF, 'v', 3))->toBeInstanceOf(Node\Expr\UnaryMinus::class);
     expect(UseVariableValueNodeFactory::fromValue(NAN, 'v', 3))->toBeInstanceOf(Node\Expr\ConstFetch::class);
     expect(UseVariableValueNodeFactory::fromValue('text', 'v', 3))->toBeInstanceOf(Node\Scalar\String_::class);
-    expect(UseVariableValueNodeFactory::fromValue(CoverageEnum::Ready, 'v', 3))->toBeInstanceOf(Node\Expr\ClassConstFetch::class);
+    expect(UseVariableValueNodeFactory::fromValue(InternalCoverageEnum::Ready, 'v', 3))->toBeInstanceOf(Node\Expr\ClassConstFetch::class);
     expect(UseVariableValueNodeFactory::fromValue(['key' => [1]], 'v', 3))->toBeInstanceOf(Node\Expr\Array_::class);
 
     expect(fn() => UseVariableValueNodeFactory::fromValue([[[1]]], 'v', 1))
