@@ -96,7 +96,7 @@ $config = new ExportConfig(
 
 `ExportConfig` immutable. `maxDepth` считается от semantic root depth `0` и одинаково применяется к каждому вложенному value: массивам, constructor arguments объектов, closures и Inline capture values.
 
-При `sortKeys=true` integer keys сортируются численно раньше string keys, строки — побайтово через `strcmp()`. Numeric-looking strings остаются строками.
+При `sortKeys=true` integer keys сортируются численно раньше string keys, строки — побайтово через `strcmp()`. Строковые ключи, которые по правилам ключей PHP-массивов остаются строками, сохраняются строками.
 
 ## Capture переменных closure
 
@@ -132,6 +132,8 @@ Object instances, resources, nested `Closure` objects и by-reference captures �
 
 `SourceBound` сохраняет source-семантику, которую можно заморозить в standalone expression: source namespace resolution и magic constants.
 
+Для unqualified namespace function/constant fallback разрешение, наблюдаемое `SourceBound`, фактически фиксируется в момент экспорта. Динамическое появление namespaced symbol после экспорта не меняет уже сгенерированное expression.
+
 `include`/`require` и `eval()` отклоняются **во всех** policy: их поведение зависит от расположения/scope generated artifact и меняется при relocation.
 
 `__FILE__` / `__DIR__` могут быть заморожены в build-time absolute path при `SourcePathPolicy::AbsoluteBuildPath`; `SourcePathPolicy::Reject` запрещает их.
@@ -160,7 +162,7 @@ Named callables не относятся к anonymous-source contract. Consumer, 
 
 ## Source consistency
 
-Source file на диске должен соответствовать revision, из которого был скомпилирован runtime closure. VarExport сравнивает доступную Reflection metadata: location, signature, defaults, capture names/reference mode и source owner.
+Source file на диске должен соответствовать revision, из которого был скомпилирован runtime closure. VarExport сравнивает доступную Reflection/source metadata: location, signature, defaults, capture names/reference mode, включая implicit captures arrow functions, generator/static-local characteristics, имена attributes closure и parameters, а также source owner там, где он доступен.
 
 Reflection PHP не предоставляет исходный hash тела closure. Поэтому **body-only изменение, не меняющее наблюдаемую metadata, невозможно доказуемо обнаружить**. В long-running/hot-reload процессе после замены source необходимо заново создать runtime closures перед экспортом. SHA-256 source cache гарантирует свежесть относительно текущего файла, но не тождество уже созданному runtime closure.
 
@@ -210,13 +212,14 @@ Low-level exporters сохраняют standalone composition API, но весь
 
 ```bash
 composer test
+composer test-coverage
 composer mutation
 composer phpstan
 composer cs-check
 composer check
 ```
 
-GitHub Actions настроен на PHP 8.4/8.5, lowest/current dependencies, quality и mutation jobs.
+GitHub Actions настроен на PHP 8.4/8.5, lowest/current dependencies, Composer validation, coverage, quality и mutation jobs.
 
 ## Связанные пакеты
 
