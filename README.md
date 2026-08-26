@@ -97,7 +97,7 @@ $config = new ExportConfig(
 
 `ExportConfig` is immutable. `maxDepth` is counted from semantic root depth `0` and applies uniformly to every nested value, including arrays, object constructor arguments, closures, and Inline capture values.
 
-With `sortKeys: true`, integer keys are ordered numerically before string keys; string keys use bytewise `strcmp()` ordering. Numeric-looking string keys stay strings.
+With `sortKeys: true`, integer keys are ordered numerically before string keys; string keys use bytewise `strcmp()` ordering. String keys that remain strings under PHP array-key semantics are preserved as strings.
 
 ## Closure captures
 
@@ -133,6 +133,8 @@ Closure export is source-based. The current source file is parsed with `nikic/ph
 
 `SourceBound` preserves source semantics that can be frozen into a standalone expression, including source namespace symbol resolution and source magic constants.
 
+For unqualified namespace function/constant fallback, the resolution observed by `SourceBound` is effectively frozen at export time. Dynamically introducing a namespaced symbol after export does not retroactively change the generated expression.
+
 `include`/`require` and `eval()` are rejected in **all** policies: their meaning depends on the location/scope of the generated artifact, so relocating an expression would change behavior.
 
 `__FILE__` / `__DIR__` may be frozen to their build-time absolute source values under `SourcePathPolicy::AbsoluteBuildPath`; `SourcePathPolicy::Reject` rejects them.
@@ -161,7 +163,7 @@ Named callables are outside the anonymous-source contract. Consumers that need t
 
 ## Source consistency
 
-The source file on disk must represent the source revision from which the runtime closure was compiled. VarExport compares observable Reflection metadata including location, signature, defaults, capture names/reference mode, and source owner metadata where available.
+The source file on disk must represent the source revision from which the runtime closure was compiled. VarExport compares observable Reflection/source metadata including location, signature, defaults, capture names/reference mode (including implicit arrow-function captures), generator/static-local characteristics, function and parameter attribute names, and source-owner metadata where available.
 
 PHP Reflection does not expose the original closure-body hash. Therefore a **body-only edit that preserves all observable metadata cannot be proven stale**. Long-running/hot-reload processes must recreate runtime closures after replacing their source before exporting them. The SHA-256 source cache guarantees freshness relative to the current file, not identity with an already-created runtime closure.
 
@@ -228,13 +230,14 @@ The helper functions delegate to the `Export` facade.
 
 ```bash
 composer test
+composer test-coverage
 composer mutation
 composer phpstan
 composer cs-check
 composer check
 ```
 
-GitHub Actions is configured for PHP 8.4/8.5 with lowest/current dependency sets plus quality and mutation jobs.
+GitHub Actions is configured for PHP 8.4/8.5 with lowest/current dependency sets plus Composer validation, coverage, quality, and mutation jobs.
 
 ## Related packages
 
