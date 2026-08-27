@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Source;
 
-use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
 use Componenta\VarExport\Exception\ConfigurationException;
 use Componenta\VarExport\Internal\ClosureIndexingVisitor;
@@ -22,8 +21,10 @@ use Throwable;
  *
  * The cache never exposes its mutable AST nodes directly: candidates() returns
  * deep-cloned subtrees that callers may safely transform.
+ *
+ * @internal
  */
-class ClosureSourceCache implements ClosureSourceCacheInterface
+class ClosureSourceCache
 {
     /**
      * @var array<string, array{
@@ -53,6 +54,7 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
         }
     }
 
+    /** @return list<ClosureSourceCandidate> */
     public function candidates(string $filename, int $startLine): array
     {
         if ($startLine < 1) {
@@ -133,9 +135,7 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
         return $source;
     }
 
-    /**
-     * @return array<int, list<ClosureSourceCandidate>>
-     */
+    /** @return array<int, list<ClosureSourceCandidate>> */
     private function parseAndIndex(string $filename, string $source): array
     {
         $parser = $this->getParser();
@@ -174,9 +174,6 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
             unset($this->cache[$path]);
         }
 
-        // A source may be allowed as a one-off parse while intentionally too
-        // large for the aggregate cache budget. Do not evict unrelated entries
-        // for a source that cannot itself be retained.
         if ($entry['sourceBytes'] > $this->maxCachedSourceBytes) {
             return;
         }
