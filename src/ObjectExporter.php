@@ -179,6 +179,12 @@ final readonly class ObjectExporter implements ContextualObjectExporterInterface
                 ['class' => $reflection->getName(), 'path' => $context->path],
             );
         }
+        if ($reflection->isUninitializedLazyObject($object)) {
+            throw new ExportException(
+                sprintf('Uninitialized lazy readonly object "%s" cannot be inspected without running its initializer.', $reflection->getName()),
+                ['class' => $reflection->getName(), 'path' => $context->path],
+            );
+        }
 
         $constructor = $reflection->getConstructor();
         $properties = $this->instanceProperties($reflection);
