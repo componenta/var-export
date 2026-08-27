@@ -10,6 +10,7 @@ use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Exception\ArrayExportException;
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Internal\ArrayKeyOrder;
+use Componenta\VarExport\Internal\ExportContext;
 use ReflectionClass;
 use ReflectionParameter;
 use ReflectionProperty;
@@ -38,7 +39,7 @@ final readonly class VarExporter
         return match (true) {
             $value === null, is_bool($value), is_int($value), is_float($value), is_string($value) => self::formatPrimitive($value),
             is_array($value) => $this->exportArray($value, $context),
-            $value instanceof Closure => $this->closureExporter->exportWithContext($value, $context),
+            $value instanceof Closure => $this->closureExporter->export($value, $context),
             $value instanceof UnitEnum => '\\' . $value::class . '::' . $value->name,
             is_object($value) => $this->exportObject($value, $context),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
