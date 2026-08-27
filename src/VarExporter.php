@@ -6,48 +6,45 @@ namespace Componenta\VarExport;
 
 use Closure;
 use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
-use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
-use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
-use Componenta\VarExport\Contract\ContextualValueExporterInterface;
+use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
-use Componenta\VarExport\Contract\VarExporterInterface;
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Internal\ValueFormatter;
-use Componenta\VarExport\Source\ClosureSourceCache;
+use UnitEnum;
 
-final readonly class VarExporter implements VarExporterInterface, ContextualValueExporterInterface
+final readonly class VarExporter
 {
     private ValueFormatterInterface $valueFormatter;
     private ArrayExporter $arrayExporter;
-    private ContextualClosureExporterInterface $closureExporter;
-    private ContextualObjectExporterInterface $objectExporter;
-    private ClosureSourceCacheInterface $sourceCache;
+    private ClosureExporter $closureExporter;
+    private ObjectExporterInterface $objectExporter;
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?ClosureSourceCacheInterface $sourceCache = null,
-        ?ContextualObjectExporterInterface $objectExporter = null,
+        ?ObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
-        ?ContextualClosureExporterInterface $closureExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
-        $this->sourceCache = $sourceCache ?? new ClosureSourceCache();
-        $this->closureExporter = $closureExporter ?? new ClosureExporter($config, $this->sourceCache);
+        $this->closureExporter = new ClosureExporter($config);
+
+        $dispatch = fn(mixed $value, ExportContext $context): string => $this->exportValue($value, $context);
 
         $objectExporter ??= new ObjectExporter(
             $config,
             $this->valueFormatter,
             closureExporter: $this->closureExporter,
         );
+        if ($objectExporter instanceof ObjectExporter) {
+            $objectExporter = $objectExporter->withValueExporter($dispatch);
+        }
 
-        $this->objectExporter = $objectExporter->withValueExporter($this);
+        $this->objectExporter = $objectExporter;
         $this->arrayExporter = new ArrayExporter(
             $config,
             $this->closureExporter,
             $this->objectExporter,
             $this->valueFormatter,
-            $this,
+            $dispatch,
         );
     }
 
@@ -56,7 +53,7 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
         return $this->exportValue($var, ExportContext::root());
     }
 
-    public function exportValue(mixed $value, ExportContext $context): string
+    private function exportValue(mixed $value, ExportContext $context): string
     {
         if ($context->depth > $this->config->maxDepth) {
             throw new ExportException(
@@ -74,36 +71,16 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
         }
 
         return match (true) {
-            is_null($value) => $this->valueFormatter->formatNull(),
-            is_bool($value) => $this->valueFormatter->formatBool($value),
-            is_int($value), is_float($value) => $this->valueFormatter->formatNumeric($value),
-            is_string($value) => $this->valueFormatter->escapeString($value),
+            $value === null, is_bool($value), is_int($value), is_float($value), is_string($value) => $this->valueFormatter->format($value),
             is_array($value) => $this->arrayExporter->exportWithContext($value, $context),
             $value instanceof Closure => $this->closureExporter->exportWithContext($value, $context),
-            is_object($value) => $this->objectExporter->exportWithContext($value, $context),
+            $value instanceof UnitEnum => '\\' . $value::class . '::' . $value->name,
+            $value instanceof ObjectExporterInterface => $this->objectExporter->export($value),
+            is_object($value) => $this->objectExporter instanceof ObjectExporter
+                ? $this->objectExporter->exportWithContext($value, $context)
+                : $this->objectExporter->export($value),
             is_resource($value) => throw ExportException::resourceNotExportable($value),
             default => throw ExportException::unsupportedType($value),
         };
-    }
-
-    public function exportStatement(mixed $var): string
-    {
-        return $this->export($var) . ';';
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return new self(
-            $config,
-            $this->sourceCache,
-            $this->objectExporter->withConfig($config),
-            $this->valueFormatter,
-            $this->closureExporter->withConfig($config),
-        );
-    }
-
-    public function getConfig(): ExportConfig
-    {
-        return $this->config;
     }
 }
