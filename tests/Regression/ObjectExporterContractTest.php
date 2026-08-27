@@ -6,13 +6,20 @@ namespace Componenta\VarExport\Tests\Regression;
 
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Exception\ExportException;
-use Componenta\VarExport\ObjectExporter;
+use Componenta\VarExport\VarExporter;
 use InvalidArgumentException;
 use ReflectionClass;
 
 final readonly class ContractSupportedValueObject
 {
     public function __construct(public int $n, public string $label)
+    {
+    }
+}
+
+final readonly class ContractNestedValueObject
+{
+    public function __construct(public ContractSupportedValueObject $child)
     {
     }
 }
@@ -104,136 +111,121 @@ final readonly class ContractUnserializeValue
     }
 }
 
+function readonlyExporter(?ExportConfig $config = null): VarExporter
+{
+    return new VarExporter(($config ?? new ExportConfig())->withGenericReadonlyObjects());
+}
+
 it('keeps generic readonly-object export disabled by default', function (): void {
-    expect((new ObjectExporter())->supports(new ContractSupportedValueObject(42, 'ok')))->toBeFalse();
+    expect(fn() => (new VarExporter())->export(new ContractSupportedValueObject(42, 'ok')))
+        ->toThrow(ExportException::class, 'disabled');
 });
 
-it('reports unsupported when state is not represented by public promoted properties', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect($exporter->supports(new ContractPrivateStateValueObject('hidden')))->toBeFalse();
+it('rejects state not represented by public promoted properties', function (): void {
+    expect(fn() => readonlyExporter()->export(new ContractPrivateStateValueObject('hidden')))
+        ->toThrow(ExportException::class, 'must be public, concrete, and hook-free');
 });
 
 it('round-trips explicitly enabled constructor value objects', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
     $value = new ContractSupportedValueObject(42, 'ok');
-    $restored = eval('return ' . $exporter->export($value) . ';');
+    $restored = eval('return ' . readonlyExporter()->export($value) . ';');
 
-    expect($exporter->supports($value))->toBeTrue()
-        ->and($restored)->toEqual($value);
+    expect($restored)->toEqual($value);
 });
 
 it('round-trips stateless readonly value objects', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-    $restored = eval('return ' . $exporter->export(new ContractEmptyReadonly()) . ';');
+    $restored = eval('return ' . readonlyExporter()->export(new ContractEmptyReadonly()) . ';');
 
     expect($restored)->toBeInstanceOf(ContractEmptyReadonly::class);
 });
 
-it('makes hydrated constructor replay an explicit caller risk rather than default support', function (): void {
+it('keeps hydrated constructor replay an explicit opt-in risk', function (): void {
     $reflection = new ReflectionClass(ContractHydratedValueObject::class);
     $object = $reflection->newInstanceWithoutConstructor();
     $reflection->getProperty('n')->setValue($object, -1);
 
-    expect((new ObjectExporter())->supports($object))->toBeFalse();
+    expect(fn() => (new VarExporter())->export($object))
+        ->toThrow(ExportException::class, 'disabled');
 
-    $explicit = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-    expect($explicit->supports($object))->toBeTrue();
-
-    $code = $explicit->export($object);
+    $code = readonlyExporter()->export($object);
     expect(fn() => eval('return ' . $code . ';'))->toThrow(InvalidArgumentException::class);
 });
 
-it('rejects anonymous readonly classes because generated PHP cannot name them', function (): void {
+it('rejects anonymous readonly classes', function (): void {
     $object = new readonly class (42) {
         public function __construct(public int $n)
         {
         }
     };
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
 
-    expect($exporter->supports($object))->toBeFalse();
+    expect(fn() => readonlyExporter()->export($object))
+        ->toThrow(ExportException::class, 'Anonymous readonly class');
 });
 
 it('rejects mutable classes from generic readonly reconstruction', function (): void {
     $mutable = new class {
         public int $n = 1;
     };
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
 
-    expect($exporter->supports($mutable))->toBeFalse();
+    expect(fn() => readonlyExporter()->export($mutable))
+        ->toThrow(ExportException::class, 'Cannot export object');
 });
 
 it('rejects readonly state without a constructor', function (): void {
     $object = (new ReflectionClass(ContractNoConstructorState::class))->newInstanceWithoutConstructor();
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
 
-    expect(fn() => $exporter->export($object))
+    expect(fn() => readonlyExporter()->export($object))
         ->toThrow(ExportException::class, 'state but no constructor');
 });
 
 it('rejects a non-public reconstruction constructor', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(ContractPrivateConstructor::make(1)))
+    expect(fn() => readonlyExporter()->export(ContractPrivateConstructor::make(1)))
         ->toThrow(ExportException::class, 'must be public');
 });
 
 it('rejects variadic constructor parameters', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(new ContractVariadicConstructor()))
+    expect(fn() => readonlyExporter()->export(new ContractVariadicConstructor()))
         ->toThrow(ExportException::class, 'variadic or passed by reference');
 });
 
 it('rejects by-reference constructor parameters', function (): void {
     $value = 1;
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
 
-    expect(fn() => $exporter->export(new ContractByReferenceConstructor($value)))
+    expect(fn() => readonlyExporter()->export(new ContractByReferenceConstructor($value)))
         ->toThrow(ExportException::class, 'variadic or passed by reference');
 });
 
 it('rejects non-promoted constructor parameters', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(new ContractNonPromotedConstructor(1)))
+    expect(fn() => readonlyExporter()->export(new ContractNonPromotedConstructor(1)))
         ->toThrow(ExportException::class, 'must be a promoted property');
 });
 
 it('rejects non-public promoted state', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(new ContractPrivatePromoted(1)))
+    expect(fn() => readonlyExporter()->export(new ContractPrivatePromoted(1)))
         ->toThrow(ExportException::class, 'must be public, concrete, and hook-free');
 });
 
 it('rejects an uninitialized promoted property', function (): void {
     $object = (new ReflectionClass(ContractSupportedValueObject::class))->newInstanceWithoutConstructor();
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
 
-    expect(fn() => $exporter->export($object))
+    expect(fn() => readonlyExporter()->export($object))
         ->toThrow(ExportException::class, 'is not initialized');
 });
 
-it('rejects instance state that is not represented by constructor parameters', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(new ContractExtraState(1)))
+it('rejects instance state outside constructor parameters', function (): void {
+    expect(fn() => readonlyExporter()->export(new ContractExtraState(1)))
         ->toThrow(ExportException::class, 'not represented by its constructor');
 });
 
 it('rejects __unserialize hydration as a generic reconstruction contract', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
-
-    expect(fn() => $exporter->export(new ContractUnserializeValue(1)))
+    expect(fn() => readonlyExporter()->export(new ContractUnserializeValue(1)))
         ->toThrow(ExportException::class, 'defines __unserialize');
 });
 
-it('throws a structured error when nesting exceeds maxDepth', function (): void {
-    $exporter = new ObjectExporter((new ExportConfig(maxDepth: 2))->withGenericReadonlyObjects());
-    $leaf = new ContractSupportedValueObject(1, 'leaf');
+it('applies maxDepth to nested readonly object state', function (): void {
+    $exporter = readonlyExporter(new ExportConfig(maxDepth: 1));
+    $value = new ContractNestedValueObject(new ContractSupportedValueObject(1, 'leaf'));
 
-    expect(fn() => $exporter->exportWithDepth($leaf, 10))
+    expect(fn() => $exporter->export($value))
         ->toThrow(ExportException::class, 'Maximum nesting depth');
 });
