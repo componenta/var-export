@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Tests;
 
+use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Export;
@@ -11,72 +12,76 @@ use PHPUnit\Framework\TestCase;
 
 final class ExportTest extends TestCase
 {
-    public function testVarExportsString(): void
+    public function testVarRoundTripsScalarValues(): void
     {
-        self::assertSame("'hello'", Export::var('hello'));
+        foreach (['hello', 42, true, null] as $value) {
+            self::assertSame($value, eval('return ' . Export::var($value) . ';'));
+        }
     }
 
-    public function testVarExportsInteger(): void
+    public function testVarRoundTripsArray(): void
     {
-        self::assertSame('42', Export::var(42));
+        $value = ['a' => 1];
+
+        self::assertSame($value, eval('return ' . Export::var($value) . ';'));
     }
 
-    public function testVarExportsArray(): void
+    public function testPrettyRoundTripsWithPrettyFormatting(): void
     {
-        $result = Export::var(['a' => 1]);
-        self::assertSame("['a' => 1]", $result);
-    }
+        $value = ['a' => 1, 'b' => 2];
+        $code = Export::pretty($value);
 
-    public function testPrettyExportsWithNewlines(): void
-    {
-        $result = Export::pretty(['a' => 1, 'b' => 2]);
-
-        self::assertStringContainsString("\n", $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
     public function testPrettyOverridesCompactConfigMode(): void
     {
-        $result = Export::pretty([1, 2], ExportConfig::compact());
+        $value = [1, 2];
+        $code = Export::pretty($value, ExportConfig::compact());
 
-        self::assertStringContainsString("\n", $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testStatementEndsWithSemicolon(): void
+    public function testStatementProducesExecutablePhpStatement(): void
     {
-        $result = Export::statement(['a' => 1]);
+        $value = ['a' => 1];
+        $statement = Export::statement($value);
 
-        self::assertStringEndsWith(';', $result);
+        self::assertStringEndsWith(';', $statement);
+        self::assertSame($value, eval('return ' . $statement));
     }
 
-    public function testArrayConvenienceMethod(): void
+    public function testArrayConvenienceMethodRoundTrips(): void
     {
-        $result = Export::array(['x' => 'y']);
+        $value = ['x' => 'y'];
 
-        self::assertSame("['x' => 'y']", $result);
+        self::assertSame($value, eval('return ' . Export::array($value) . ';'));
     }
 
-    public function testClosureConvenienceMethod(): void
+    public function testClosureConvenienceMethodProducesEquivalentCallable(): void
     {
-        $closure = static fn(): int => 42;
-        $result = Export::closure($closure);
-        $restored = eval("return {$result};");
+        $closure = static fn(int $value): int => $value + 1;
+        $restored = eval('return ' . Export::closure($closure) . ';');
 
-        self::assertStringContainsString('fn(): int', $result);
-        self::assertInstanceOf(\Closure::class, $restored);
-        self::assertSame(42, $restored());
+        self::assertInstanceOf(Closure::class, $restored);
+        self::assertSame(42, $restored(41));
     }
 
-    public function testConfigIsApplied(): void
+    public function testConfigChangesObservableArrayOrder(): void
     {
         $config = new ExportConfig(sortKeys: true);
-        $result = Export::var(['z' => 1, 'a' => 2], $config);
+        $restored = eval('return ' . Export::var(['z' => 1, 'a' => 2], $config) . ';');
 
-        self::assertLessThan(strpos($result, "'z'"), strpos($result, "'a'"));
+        self::assertSame(['a', 'z'], array_keys($restored));
+        self::assertSame(['a' => 2, 'z' => 1], $restored);
     }
 
-    public function testUnsupportedObjectThrows(): void
+    public function testUnsupportedObjectThrowsTypedFailure(): void
     {
         $this->expectException(ExportException::class);
+        $this->expectExceptionMessage('stdClass');
 
         Export::var(new \stdClass());
     }
