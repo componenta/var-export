@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Exception\ExportException;
-use Componenta\VarExport\ObjectExporter;
+use Componenta\VarExport\VarExporter;
 
 readonly class LazyReadonlyValueFixture
 {
@@ -23,14 +23,11 @@ it('rejects an uninitialized lazy readonly object without running its initialize
             $property->setRawValueWithoutLazyInitialization($object, 42);
         },
     );
-    $exporter = new ObjectExporter((new ExportConfig())->withGenericReadonlyObjects());
+    $exporter = new VarExporter((new ExportConfig())->withGenericReadonlyObjects());
 
     expect($reflection->isUninitializedLazyObject($lazy))->toBeTrue();
     expect(fn() => $exporter->export($lazy))
         ->toThrow(ExportException::class, 'Uninitialized lazy readonly object');
     expect($initializations)->toBe(0)
-        ->and($reflection->isUninitializedLazyObject($lazy))->toBeTrue()
-        ->and($exporter->supports($lazy))->toBeFalse()
-        ->and($initializations)->toBe(0)
         ->and($reflection->isUninitializedLazyObject($lazy))->toBeTrue();
 });
