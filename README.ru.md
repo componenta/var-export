@@ -162,11 +162,11 @@ Named callables не относятся к anonymous-source contract. Consumer, 
 
 ## Source consistency
 
-Source file на диске должен соответствовать revision, из которого был скомпилирован runtime closure. VarExport сравнивает доступную Reflection/source metadata: location, signature, defaults, capture names/reference mode, включая implicit captures arrow functions, generator/static-local characteristics, имена attributes closure и parameters, а также source owner там, где он доступен.
+Source file на диске должен соответствовать revision, из которого был скомпилирован runtime closure. VarExport сравнивает доступную Reflection/source metadata: declaration location, глубину вложенной closure, signature, defaults, capture names/reference mode, включая implicit captures arrow functions, generator/static-local characteristics, имена и безопасно проверяемые arguments attributes closure и parameters, а также source owner там, где он доступен.
 
-Reflection PHP не предоставляет исходный hash тела closure. Поэтому **body-only изменение, не меняющее наблюдаемую metadata, невозможно доказуемо обнаружить**. В long-running/hot-reload процессе после замены source необходимо заново создать runtime closures перед экспортом. SHA-256 source cache гарантирует свежесть относительно текущего файла, но не тождество уже созданному runtime closure.
+Reflection PHP не предоставляет исходный hash тела или source closure. Поэтому **любое изменение source, не меняющее всю наблюдаемую metadata, невозможно доказуемо обнаружить**; body-only изменение — наиболее частый пример. В long-running/hot-reload процессе после замены source необходимо заново создать runtime closures перед экспортом. SHA-256 source cache гарантирует свежесть относительно текущего файла, но не тождество уже созданному runtime closure.
 
-Parameter defaults не исполняются ради проверки source identity. Defaults, которые невозможно безопасно проверить constant-expression evaluator'ом, например `new Foo()`, отклоняются явно.
+Parameter defaults и attribute arguments не исполняются ради проверки source identity. Безопасно вычислимые constant expressions сравниваются. Expressions, проверка которых потребовала бы выполнения или autoload пользовательского кода, например `new Foo()` или неразрешимые class-constant expressions, отклоняются явно, а не считаются совпавшими.
 
 ## Readonly value objects
 
@@ -194,7 +194,7 @@ Low-level exporters сохраняют standalone composition API, но весь
 
 ## Source cache
 
-`ClosureSourceCache` content-addressed по canonical path + SHA-256 fingerprint source. Cache ограничен LRU-budget и индексирует closure candidates по source line. Возвращаемые AST candidates deep-detached, поэтому visitor transformations не мутируют cache state.
+`ClosureSourceCache` content-addressed по canonical path + SHA-256 fingerprint source. Cache ограничен LRU-budget и индексирует closure candidates по declaration line, которую сообщает Reflection. Source, разрешённый для one-off parse, но превышающий aggregate cache budget, не сохраняется и не вытесняет несвязанные retained entries. Возвращаемые AST candidates deep-detached, поэтому visitor transformations не мутируют cache state.
 
 Для advanced composition доступен `ClosureSourceCacheInterface`; default implementation — `Componenta\VarExport\Source\ClosureSourceCache`.
 
