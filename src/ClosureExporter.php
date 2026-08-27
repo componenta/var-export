@@ -7,8 +7,7 @@ namespace Componenta\VarExport;
 use Closure;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
-use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
+use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
 use Componenta\VarExport\Internal\ClosurePortabilityAnalyzer;
 use Componenta\VarExport\Internal\ClosureValidator;
@@ -47,16 +46,16 @@ use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
 
-final readonly class ClosureExporter implements ContextualClosureExporterInterface
+final readonly class ClosureExporter implements ClosureExporterInterface
 {
     private ClosureValidator $validator;
     private UseVariableInliner $inliner;
     private PrettyPrinter $printer;
-    private ClosureSourceCacheInterface $sourceCache;
+    private ClosureSourceCache $sourceCache;
 
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
-        ?ClosureSourceCacheInterface $sourceCache = null,
+        ?ClosureSourceCache $sourceCache = null,
     ) {
         $this->validator = new ClosureValidator();
         $this->inliner = new UseVariableInliner();
