@@ -163,11 +163,11 @@ Named callables are outside the anonymous-source contract. Consumers that need t
 
 ## Source consistency
 
-The source file on disk must represent the source revision from which the runtime closure was compiled. VarExport compares observable Reflection/source metadata including location, signature, defaults, capture names/reference mode (including implicit arrow-function captures), generator/static-local characteristics, function and parameter attribute names, and source-owner metadata where available.
+The source file on disk must represent the source revision from which the runtime closure was compiled. VarExport compares observable Reflection/source metadata including declaration location, nested-closure depth, signature, defaults, capture names/reference mode (including implicit arrow-function captures), generator/static-local characteristics, function and parameter attribute names and safely verifiable arguments, and source-owner metadata where available.
 
-PHP Reflection does not expose the original closure-body hash. Therefore a **body-only edit that preserves all observable metadata cannot be proven stale**. Long-running/hot-reload processes must recreate runtime closures after replacing their source before exporting them. The SHA-256 source cache guarantees freshness relative to the current file, not identity with an already-created runtime closure.
+PHP Reflection does not expose the original closure-body or source hash. Therefore **any source edit that preserves all observable metadata cannot be proven stale**; a body-only edit is the most common example. Long-running/hot-reload processes must recreate runtime closures after replacing their source before exporting them. The SHA-256 source cache guarantees freshness relative to the current file, not identity with an already-created runtime closure.
 
-Parameter defaults are never executed merely to prove source identity. Defaults the constant-expression evaluator cannot verify safely (for example `new Foo()` defaults) are rejected explicitly.
+Parameter defaults and attribute arguments are never executed merely to prove source identity. Constant expressions that can be evaluated safely are compared. Expressions whose verification would require executing or autoloading user code, such as `new Foo()` or unresolved class-constant expressions, are rejected explicitly rather than treated as a match.
 
 ## Readonly value objects
 
@@ -195,7 +195,7 @@ Low-level exporters retain standalone composition APIs, but a composed root grap
 
 ## Source cache
 
-`ClosureSourceCache` is content-addressed by canonical path plus SHA-256 source fingerprint. It maintains bounded LRU storage and indexes closure candidates by source line. Returned candidates are deep detached copies, so AST transformations cannot mutate cache state.
+`ClosureSourceCache` is content-addressed by canonical path plus SHA-256 source fingerprint. It maintains bounded LRU storage and indexes closure candidates by the declaration line reported by Reflection. Sources allowed for one-off parsing but larger than the aggregate cache budget are not retained and do not evict unrelated retained entries. Returned candidates are deep detached copies, so AST transformations cannot mutate cache state.
 
 Advanced callers may provide `ClosureSourceCacheInterface`; the default implementation is `Componenta\VarExport\Source\ClosureSourceCache`.
 
