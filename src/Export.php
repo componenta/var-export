@@ -9,9 +9,7 @@ use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Config\FormatterMode;
 use Componenta\VarExport\Contract\ExceptionInterface;
 
-/**
- * Stable convenience facade for one-off exports.
- */
+/** Stable convenience facade for one-off exports. */
 final class Export
 {
     private function __construct()
@@ -35,7 +33,7 @@ final class Export
     /** @throws ExceptionInterface */
     public static function statement(mixed $var, ?ExportConfig $config = null): string
     {
-        return self::createExporter($config)->exportStatement($var);
+        return self::createExporter($config)->export($var) . ';';
     }
 
     /**
