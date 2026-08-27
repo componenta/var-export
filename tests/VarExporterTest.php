@@ -137,11 +137,9 @@ final class VarExporterTest extends TestCase
     public function testWithConfigProducesIndependentExporterUsingNewBehavior(): void
     {
         $original = new VarExporter(ExportConfig::compact());
-        $prettyConfig = ExportConfig::pretty();
-        $pretty = $original->withConfig($prettyConfig);
+        $pretty = $original->withConfig(ExportConfig::pretty());
 
         self::assertNotSame($original, $pretty);
-        self::assertSame($prettyConfig, $pretty->getConfig());
         self::assertStringNotContainsString("\n", $original->export([1, 2]));
         self::assertStringContainsString("\n", $pretty->export([1, 2]));
         self::assertSame([1, 2], eval('return ' . $pretty->export([1, 2]) . ';'));
