@@ -138,8 +138,9 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
      */
     private function parseAndIndex(string $filename, string $source): array
     {
+        $parser = $this->getParser();
         try {
-            $ast = $this->getParser()->parse($source);
+            $ast = $parser->parse($source);
         } catch (Throwable $e) {
             throw ClosureExportException::parsingFailed($filename, $e->getMessage(), $e);
         }
@@ -152,7 +153,7 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
         /** @var array<Stmt> $resolved */
         $resolved = $resolver->traverse($ast);
 
-        $visitor = new ClosureIndexingVisitor();
+        $visitor = new ClosureIndexingVisitor($parser->getTokens());
         (new NodeTraverser($visitor))->traverse($resolved);
 
         return $visitor->candidatesByLine();
