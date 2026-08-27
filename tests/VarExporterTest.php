@@ -6,6 +6,7 @@ namespace Componenta\VarExport\Tests;
 
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Exception\ExportException;
+use Componenta\VarExport\Export;
 use Componenta\VarExport\VarExporter;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -94,10 +95,10 @@ final class VarExporterTest extends TestCase
         self::assertSame(14, $roundTripped(7));
     }
 
-    public function testExportStatementCanBeExecutedAsAStatementExpression(): void
+    public function testStatementConvenienceCanBeExecuted(): void
     {
         $value = ['key' => 'value'];
-        $statement = $this->exporter->exportStatement($value);
+        $statement = Export::statement($value);
 
         self::assertStringEndsWith(';', $statement);
         self::assertSame($value, eval('return ' . $statement));
@@ -134,13 +135,12 @@ final class VarExporterTest extends TestCase
         $exporter->export([[1]]);
     }
 
-    public function testWithConfigProducesIndependentExporterUsingNewBehavior(): void
+    public function testConfigurationIsChosenAtConstructionBoundary(): void
     {
-        $original = new VarExporter(ExportConfig::compact());
-        $pretty = $original->withConfig(ExportConfig::pretty());
+        $compact = new VarExporter(ExportConfig::compact());
+        $pretty = new VarExporter(ExportConfig::pretty());
 
-        self::assertNotSame($original, $pretty);
-        self::assertStringNotContainsString("\n", $original->export([1, 2]));
+        self::assertStringNotContainsString("\n", $compact->export([1, 2]));
         self::assertStringContainsString("\n", $pretty->export([1, 2]));
         self::assertSame([1, 2], eval('return ' . $pretty->export([1, 2]) . ';'));
     }
