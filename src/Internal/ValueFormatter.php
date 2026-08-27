@@ -9,44 +9,31 @@ use Componenta\VarExport\Contract\ValueFormatterInterface;
 /** @internal */
 final readonly class ValueFormatter implements ValueFormatterInterface
 {
-    public function formatNumeric(int|float $value): string
+    public function format(null|bool|int|float|string $value): string
     {
-        if (is_float($value)) {
-            if ($value === INF) {
-                return '\\INF';
-            }
+        return match (true) {
+            $value === null => 'null',
+            is_bool($value) => $value ? 'true' : 'false',
+            is_int($value) => var_export($value, true),
+            is_float($value) => $this->formatFloat($value),
+            default => var_export($value, true),
+        };
+    }
 
-            if ($value === -INF) {
-                return '-\\INF';
-            }
-
-            if (is_nan($value)) {
-                return '\\NAN';
-            }
-
-            return self::formatFiniteFloat($value);
+    private function formatFloat(float $value): string
+    {
+        if ($value === INF) {
+            return '\\INF';
         }
 
-        return var_export($value, true);
-    }
+        if ($value === -INF) {
+            return '-\\INF';
+        }
 
-    public function escapeString(string $value): string
-    {
-        return var_export($value, true);
-    }
+        if (is_nan($value)) {
+            return '\\NAN';
+        }
 
-    public function formatBool(bool $value): string
-    {
-        return $value ? 'true' : 'false';
-    }
-
-    public function formatNull(): string
-    {
-        return 'null';
-    }
-
-    private static function formatFiniteFloat(float $value): string
-    {
         $formatted = self::normalizeDecimalSeparator(sprintf('%.16G', $value));
         if ($value !== (float) $formatted) {
             $formatted = self::normalizeDecimalSeparator(sprintf('%.17G', $value));
