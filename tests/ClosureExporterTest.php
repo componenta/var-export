@@ -37,15 +37,18 @@ final class ClosureExporterTest extends TestCase
         self::assertSame(5, $restored());
     }
 
-    public function testPreserveKeepsUseClause(): void
+    public function testPreserveKeepsLexicalCaptureAndRuntimeBehavior(): void
     {
         $value = 42;
         $closure = static function () use ($value): int {
             return $value;
         };
         $exporter = new ClosureExporter(new ExportConfig(closureUseMode: ClosureUseMode::Preserve));
+        $code = $exporter->export($closure);
+        $restored = eval('return ' . $code . ';');
 
-        self::assertStringContainsString('use ($value)', $exporter->export($closure));
+        self::assertStringContainsString('use ($value)', $code);
+        self::assertSame(42, $restored());
     }
 
     public function testInlineRejectsByReferenceCapture(): void
@@ -89,7 +92,7 @@ final class ClosureExporterTest extends TestCase
         self::assertSame(42, $restored());
     }
 
-    public function testWithConfigReusesSourceCacheButAppliesNewMode(): void
+    public function testWithConfigAppliesNewUseModeWithoutChangingOriginalExporter(): void
     {
         $value = 7;
         $closure = static function () use ($value): int {
@@ -98,9 +101,15 @@ final class ClosureExporterTest extends TestCase
         $inline = new ClosureExporter(new ExportConfig(closureUseMode: ClosureUseMode::Inline));
         $preserve = $inline->withConfig(new ExportConfig(closureUseMode: ClosureUseMode::Preserve));
 
-        self::assertStringContainsString('use ($value)', $preserve->export($closure));
-        $restored = eval('return ' . $inline->export($closure) . ';');
-        self::assertSame(7, $restored());
+        $inlineCode = $inline->export($closure);
+        $preserveCode = $preserve->export($closure);
+        $inlineRestored = eval('return ' . $inlineCode . ';');
+        $preserveRestored = eval('return ' . $preserveCode . ';');
+
+        self::assertStringNotContainsString('use ($value)', $inlineCode);
+        self::assertStringContainsString('use ($value)', $preserveCode);
+        self::assertSame(7, $inlineRestored());
+        self::assertSame(7, $preserveRestored());
     }
 
     public function testArrowFunctionTypesAndGlobalFunctionsRoundTrip(): void
