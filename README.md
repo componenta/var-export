@@ -137,6 +137,8 @@ For unqualified namespace function/constant fallback, the resolution observed by
 
 `include`/`require` and `eval()` are rejected in **all** policies: their meaning depends on the location/scope of the generated artifact, so relocating an expression would change behavior.
 
+PHP compilation-unit directives are not representable inside an expression. Generated closures must therefore be compiled under the same relevant `declare(...)` context as their source, most importantly the same `strict_types` mode (and, when used, equivalent `ticks` semantics). `eval()` code is weakly typed unless the evaluated string itself contains `declare(strict_types=1);`. A single generated compilation unit cannot faithfully combine source closures that require conflicting compilation modes; use a consistent project convention or separate artifacts.
+
 `__FILE__` / `__DIR__` may be frozen to their build-time absolute source values under `SourcePathPolicy::AbsoluteBuildPath`; `SourcePathPolicy::Reject` rejects them.
 
 ### `ClosureExportPolicy::PortableExpression`
@@ -149,7 +151,7 @@ Use this for build/cache artifacts. In addition to the universal restrictions ab
 - provider-file-local functions that may not be loaded with the artifact;
 - runtime user-defined constants whose definition is not guaranteed at load time.
 
-Imported and fully-qualified external names remain valid.
+Imported and fully-qualified external names remain valid. Portability refers to the generated expression and build/runtime location; the compilation-unit `declare(...)` precondition above still applies.
 
 ## Closure class and trait scope
 
@@ -178,7 +180,7 @@ $config = (new ExportConfig())
     ->withGenericReadonlyObjects();
 ```
 
-In opt-in mode the class must be user-defined and non-anonymous; the constructor must be public; each parameter must map to a public promoted concrete hook-free property; variadic/by-reference constructor parameters, extra instance state, and `__unserialize()` hydration are rejected.
+In opt-in mode the class must be user-defined and non-anonymous; the constructor must be public; each parameter must map to a public promoted concrete hook-free property; variadic/by-reference constructor parameters, extra instance state, and `__unserialize()` hydration are rejected. Uninitialized PHP 8.4 lazy objects are also rejected before property inspection so export/supports preflight cannot run their initializer as a side effect.
 
 The generated expression executes the constructor again. Use generic reconstruction only for classes whose constructor is part of a stable value contract. Framework/cache descriptor types should normally use an explicit class-specific exporter.
 
