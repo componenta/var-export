@@ -45,3 +45,29 @@ it('exports a closure whose multiline attribute precedes the declaration', funct
         @unlink($file);
     }
 });
+
+it('preserves nested attributed closure magic names using the runtime declaration line', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_nested_multiline_attribute_' . bin2hex(random_bytes(6)) . '.php';
+    $attribute = 'ComponentaNestedMultilineAttribute' . bin2hex(random_bytes(5));
+
+    try {
+        file_put_contents(
+            $file,
+            "<?php\n#[\\Attribute(\\Attribute::TARGET_FUNCTION)]\nclass {$attribute} {}\nreturn static function (): Closure {\n    return #[{$attribute}]\n    static fn(): array => [__FUNCTION__, __METHOD__];\n};\n",
+        );
+        /** @var Closure $outer */
+        $outer = require $file;
+        /** @var Closure $inner */
+        $inner = $outer();
+        $expected = $inner();
+
+        /** @var Closure $restoredOuter */
+        $restoredOuter = eval('return ' . Export::closure($outer) . ';');
+        /** @var Closure $restoredInner */
+        $restoredInner = $restoredOuter();
+
+        expect($restoredInner())->toBe($expected);
+    } finally {
+        @unlink($file);
+    }
+});
