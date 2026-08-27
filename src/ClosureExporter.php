@@ -318,7 +318,10 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
     private function sourceOwnerMatches(ClosureSourceCandidate $candidate, ReflectionFunction $reflection): bool
     {
-        $name = self::unwrapClosureName($reflection->getName());
+        [$closureDepth, $name] = self::closureNameParts($reflection->getName());
+        if ($candidate->closureDepth !== $closureDepth) {
+            return false;
+        }
 
         if ($candidate->function !== '') {
             return str_starts_with($name, $candidate->function . '():');
@@ -347,14 +350,17 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         return str_starts_with($name, $reflection->getFileName() . ':');
     }
 
-    private static function unwrapClosureName(string $name): string
+    /** @return array{int, string} */
+    private static function closureNameParts(string $name): array
     {
+        $depth = 0;
         $prefix = '{closure:';
         while (str_starts_with($name, $prefix)) {
+            ++$depth;
             $name = substr($name, strlen($prefix));
         }
 
-        return $name;
+        return [$depth, $name];
     }
 
     /**

@@ -28,13 +28,22 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     private array $namespaceStack = [];
 
     /** @var list<string> */
+    private array $traitStack = [];
+
+    /** @var list<string> */
+    private array $classStack = [];
+
+    /** @var list<string> */
+    private array $classLikeFunctionStack = [];
+
+    /** @var list<string> */
     private array $methodStack = [];
 
     /** @var list<string> */
     private array $propertyStack = [];
 
-    /** @var list<array{string, string, string, string, string}> */
-    private array $classLikeScopeStack = [];
+    /** @var list<int> */
+    private array $closureScopeDepthStack = [];
 
     /** @var list<array{string, string, string, string}> */
     private array $functionScopeStack = [];
@@ -45,6 +54,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     private string $function = '';
     private string $method = '';
     private string $property = '';
+    private int $closureDepth = 0;
 
     public function enterNode(Node $node): null
     {
@@ -56,7 +66,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         }
 
         if ($node instanceof Trait_) {
-            $this->pushClassLikeScope();
+            $this->traitStack[] = $this->trait;
+            $this->classLikeFunctionStack[] = $this->function;
+            $this->function = '';
             $name = $node->name?->toString() ?? '';
             $this->trait = $this->qualify($name);
 
@@ -64,7 +76,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         }
 
         if ($node instanceof Class_ || $node instanceof Enum_) {
-            $this->pushClassLikeScope();
+            $this->classStack[] = $this->class;
+            $this->classLikeFunctionStack[] = $this->function;
+            $this->function = '';
             $name = $node->name?->toString() ?? '';
             $this->class = $this->qualify($name);
 
@@ -73,7 +87,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
         if ($node instanceof ClassMethod) {
             $this->methodStack[] = $this->method;
+            $this->closureScopeDepthStack[] = $this->closureDepth;
             $this->method = $node->name->toString();
+            $this->closureDepth = 0;
 
             return null;
         }
@@ -87,22 +103,27 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
         if ($node instanceof PropertyHook) {
             $this->methodStack[] = $this->method;
+            $this->closureScopeDepthStack[] = $this->closureDepth;
             $this->method = '$' . $this->property . '::' . $node->name->toString();
+            $this->closureDepth = 0;
 
             return null;
         }
 
         if ($node instanceof Function_) {
             $this->functionScopeStack[] = [$this->class, $this->trait, $this->function, $this->method];
+            $this->closureScopeDepthStack[] = $this->closureDepth;
             $this->class = '';
             $this->trait = '';
             $this->method = '';
             $this->function = $this->qualify($node->name->toString());
+            $this->closureDepth = 0;
 
             return null;
         }
 
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
+            ++$this->closureDepth;
             $this->candidates[$node->getStartLine()][] = new ClosureSourceCandidate(
                 $node,
                 $this->namespace,
@@ -110,6 +131,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
                 $this->class,
                 $this->function,
                 $this->method,
+                $this->closureDepth,
             );
         }
 
@@ -118,14 +140,22 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
     public function leaveNode(Node $node): null
     {
-        if ($node instanceof Function_) {
+        if ($node instanceof Closure || $node instanceof ArrowFunction) {
+            --$this->closureDepth;
+        } elseif ($node instanceof Function_) {
             [$this->class, $this->trait, $this->function, $this->method] = array_pop($this->functionScopeStack) ?? ['', '', '', ''];
+            $this->closureDepth = array_pop($this->closureScopeDepthStack) ?? 0;
         } elseif ($node instanceof PropertyHook || $node instanceof ClassMethod) {
             $this->method = array_pop($this->methodStack) ?? '';
+            $this->closureDepth = array_pop($this->closureScopeDepthStack) ?? 0;
         } elseif ($node instanceof Property) {
             $this->property = array_pop($this->propertyStack) ?? '';
-        } elseif ($node instanceof Class_ || $node instanceof Enum_ || $node instanceof Trait_) {
-            $this->popClassLikeScope();
+        } elseif ($node instanceof Class_ || $node instanceof Enum_) {
+            $this->class = array_pop($this->classStack) ?? '';
+            $this->function = array_pop($this->classLikeFunctionStack) ?? '';
+        } elseif ($node instanceof Trait_) {
+            $this->trait = array_pop($this->traitStack) ?? '';
+            $this->function = array_pop($this->classLikeFunctionStack) ?? '';
         } elseif ($node instanceof Namespace_) {
             $this->namespace = array_pop($this->namespaceStack) ?? '';
         }
@@ -137,33 +167,6 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function candidatesByLine(): array
     {
         return $this->candidates;
-    }
-
-    private function pushClassLikeScope(): void
-    {
-        $this->classLikeScopeStack[] = [
-            $this->class,
-            $this->trait,
-            $this->function,
-            $this->method,
-            $this->property,
-        ];
-        $this->class = '';
-        $this->trait = '';
-        $this->function = '';
-        $this->method = '';
-        $this->property = '';
-    }
-
-    private function popClassLikeScope(): void
-    {
-        [
-            $this->class,
-            $this->trait,
-            $this->function,
-            $this->method,
-            $this->property,
-        ] = array_pop($this->classLikeScopeStack) ?? ['', '', '', '', ''];
     }
 
     private function qualify(string $name): string

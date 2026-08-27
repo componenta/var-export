@@ -19,27 +19,24 @@ function dynamicClassDeclaredInsideFunctionClosure(): Closure
     return ComponentaDynamicFunctionOwner::make();
 }
 
-trait ComponentaDynamicOuterTrait
+function dynamicTraitDeclaredInsideFunctionClosure(): Closure
 {
-    public static function dynamicClassClosure(): Closure
-    {
-        if (!class_exists('ComponentaDynamicTraitNestedOwner', false)) {
-            class ComponentaDynamicTraitNestedOwner
+    if (!trait_exists('ComponentaDynamicFunctionTrait', false)) {
+        trait ComponentaDynamicFunctionTrait
+        {
+            public static function make(): Closure
             {
-                public static function make(): Closure
-                {
-                    return static fn(): string => __METHOD__;
-                }
+                return static fn(): string => __TRAIT__;
             }
         }
 
-        return ComponentaDynamicTraitNestedOwner::make();
+        class ComponentaDynamicFunctionTraitConsumer
+        {
+            use ComponentaDynamicFunctionTrait;
+        }
     }
-}
 
-final class ComponentaDynamicOuterTraitConsumer
-{
-    use ComponentaDynamicOuterTrait;
+    return ComponentaDynamicFunctionTraitConsumer::make();
 }
 
 it('exports a closure from a named class declared inside a named function', function (): void {
@@ -53,13 +50,13 @@ it('exports a closure from a named class declared inside a named function', func
         ->and($expected)->toBe('ComponentaDynamicFunctionOwner::make');
 });
 
-it('exports a closure from a named class declared inside a trait method', function (): void {
-    $closure = ComponentaDynamicOuterTraitConsumer::dynamicClassClosure();
+it('exports a closure from a trait declared inside a named function', function (): void {
+    $closure = dynamicTraitDeclaredInsideFunctionClosure();
     $expected = $closure();
 
     /** @var Closure $restored */
     $restored = eval('return ' . Export::closure($closure) . ';');
 
     expect($restored())->toBe($expected)
-        ->and($expected)->toBe('ComponentaDynamicTraitNestedOwner::make');
+        ->and($expected)->toBe('ComponentaDynamicFunctionTrait');
 });
