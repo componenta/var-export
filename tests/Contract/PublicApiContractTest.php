@@ -18,16 +18,13 @@ use Componenta\VarExport\ObjectExporter;
 use Componenta\VarExport\VarExporter;
 
 it('keeps VarExporter focused on exporting one value', function (): void {
-    $reflection = new \ReflectionClass(VarExporter::class);
-    $methods = array_map(
-        static fn(\ReflectionMethod $method): string => $method->getName(),
-        array_filter(
-            $reflection->getMethods(\ReflectionMethod::IS_PUBLIC),
-            static fn(\ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === VarExporter::class,
-        ),
-    );
+    $methods = ownPublicMethods(VarExporter::class);
 
-    sort($methods);
+    expect($methods)->toBe(['__construct', 'export']);
+});
+
+it('keeps ClosureExporter focused on exporting one closure', function (): void {
+    $methods = ownPublicMethods(ClosureExporter::class);
 
     expect($methods)->toBe(['__construct', 'export']);
 });
@@ -57,13 +54,28 @@ it('does not expose implementation decomposition as public contracts', function 
     }
 });
 
-it('does not expose implementation helpers as root exporter classes', function (): void {
+it('does not expose array, generic-object, or context helpers as root classes', function (): void {
     foreach ([
         ArrayExporter::class,
-        ClosureExporter::class,
         ObjectExporter::class,
         ExportContext::class,
     ] as $class) {
         expect(class_exists($class))->toBeFalse();
     }
 });
+
+/** @param class-string $class */
+function ownPublicMethods(string $class): array
+{
+    $reflection = new \ReflectionClass($class);
+    $methods = array_map(
+        static fn(\ReflectionMethod $method): string => $method->getName(),
+        array_filter(
+            $reflection->getMethods(\ReflectionMethod::IS_PUBLIC),
+            static fn(\ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === $class,
+        ),
+    );
+    sort($methods);
+
+    return $methods;
+}
