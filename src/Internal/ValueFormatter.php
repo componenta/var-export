@@ -59,7 +59,7 @@ final readonly class ValueFormatter implements ValueFormatterInterface
 
     private static function normalizeDecimalSeparator(string $value): string
     {
-        $decimalPoint = localeconv()['decimal_point'] ?? '.';
+        $decimalPoint = localeconv()['decimal_point'];
         if ($decimalPoint === '' || $decimalPoint === '.') {
             return $value;
         }
