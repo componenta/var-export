@@ -102,3 +102,21 @@ it('rejects a named-function namespace changed on disk after closure creation', 
         @unlink($file);
     }
 });
+
+it('rejects a named-function owner replaced by a top-level closure', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_top_level_owner_' . bin2hex(random_bytes(6)) . '.php';
+    $function = 'componentaVarExportTopLevelOwner' . bin2hex(random_bytes(5));
+
+    try {
+        file_put_contents($file, "<?php function {$function}(): \\Closure { return static fn(): string => 'same'; } return {$function}();");
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents($file, "<?php return static fn(): string => 'same';");
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});

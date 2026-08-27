@@ -28,16 +28,13 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     private array $namespaceStack = [];
 
     /** @var list<string> */
-    private array $traitStack = [];
-
-    /** @var list<string> */
-    private array $classStack = [];
-
-    /** @var list<string> */
     private array $methodStack = [];
 
     /** @var list<string> */
     private array $propertyStack = [];
+
+    /** @var list<array{string, string, string, string, string}> */
+    private array $classLikeScopeStack = [];
 
     /** @var list<array{string, string, string, string}> */
     private array $functionScopeStack = [];
@@ -59,7 +56,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         }
 
         if ($node instanceof Trait_) {
-            $this->traitStack[] = $this->trait;
+            $this->pushClassLikeScope();
             $name = $node->name?->toString() ?? '';
             $this->trait = $this->qualify($name);
 
@@ -67,7 +64,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
         }
 
         if ($node instanceof Class_ || $node instanceof Enum_) {
-            $this->classStack[] = $this->class;
+            $this->pushClassLikeScope();
             $name = $node->name?->toString() ?? '';
             $this->class = $this->qualify($name);
 
@@ -127,10 +124,8 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
             $this->method = array_pop($this->methodStack) ?? '';
         } elseif ($node instanceof Property) {
             $this->property = array_pop($this->propertyStack) ?? '';
-        } elseif ($node instanceof Class_ || $node instanceof Enum_) {
-            $this->class = array_pop($this->classStack) ?? '';
-        } elseif ($node instanceof Trait_) {
-            $this->trait = array_pop($this->traitStack) ?? '';
+        } elseif ($node instanceof Class_ || $node instanceof Enum_ || $node instanceof Trait_) {
+            $this->popClassLikeScope();
         } elseif ($node instanceof Namespace_) {
             $this->namespace = array_pop($this->namespaceStack) ?? '';
         }
@@ -142,6 +137,33 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function candidatesByLine(): array
     {
         return $this->candidates;
+    }
+
+    private function pushClassLikeScope(): void
+    {
+        $this->classLikeScopeStack[] = [
+            $this->class,
+            $this->trait,
+            $this->function,
+            $this->method,
+            $this->property,
+        ];
+        $this->class = '';
+        $this->trait = '';
+        $this->function = '';
+        $this->method = '';
+        $this->property = '';
+    }
+
+    private function popClassLikeScope(): void
+    {
+        [
+            $this->class,
+            $this->trait,
+            $this->function,
+            $this->method,
+            $this->property,
+        ] = array_pop($this->classLikeScopeStack) ?? ['', '', '', '', ''];
     }
 
     private function qualify(string $name): string

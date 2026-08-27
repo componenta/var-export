@@ -337,18 +337,14 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                 return str_starts_with($name, $candidate->class . '::' . $candidate->method . '():');
             }
 
-            $scope = $reflection->getClosureScopeClass();
-
-            return $scope !== null
-                && $scope->isAnonymous()
-                && str_contains($name, '::' . $candidate->method . '():');
+            return false;
         }
 
         if ($candidate->class !== '') {
             return str_starts_with($name, $candidate->class . '::');
         }
 
-        return true;
+        return str_starts_with($name, $reflection->getFileName() . ':');
     }
 
     private static function unwrapClosureName(string $name): string
