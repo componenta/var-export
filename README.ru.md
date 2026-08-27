@@ -136,6 +136,8 @@ Object instances, resources, nested `Closure` objects и by-reference captures �
 
 `include`/`require` и `eval()` отклоняются **во всех** policy: их поведение зависит от расположения/scope generated artifact и меняется при relocation.
 
+Compilation-unit directives PHP невозможно выразить внутри отдельного expression. Поэтому generated closure должна компилироваться в том же релевантном `declare(...)` context, что и исходная closure; прежде всего должен совпадать режим `strict_types`, а при использовании `ticks` — и его семантика. Код `eval()` по умолчанию компилируется в weak mode, если сама evaluated string не содержит `declare(strict_types=1);`. Один generated compilation unit не может точно объединить source closures, которым требуются конфликтующие compilation modes; используйте единый project convention либо раздельные artifacts.
+
 `__FILE__` / `__DIR__` могут быть заморожены в build-time absolute path при `SourcePathPolicy::AbsoluteBuildPath`; `SourcePathPolicy::Reject` запрещает их.
 
 ### `ClosureExportPolicy::PortableExpression`
@@ -148,7 +150,7 @@ Object instances, resources, nested `Closure` objects и by-reference captures �
 - provider-file-local functions, которые могут отсутствовать при загрузке artifact;
 - runtime user-defined constants, существование которых не гарантировано.
 
-Imported/FQ external names разрешены.
+Imported/FQ external names разрешены. Portable означает переносимость generated expression между build/runtime locations; требование совпадения compilation-unit `declare(...)` context сохраняется.
 
 ## Class и trait scope closure
 
@@ -177,7 +179,7 @@ $config = (new ExportConfig())
     ->withGenericReadonlyObjects();
 ```
 
-В opt-in режиме class должен быть user-defined и non-anonymous; constructor — public; каждый parameter — public promoted concrete hook-free property. Variadic/by-reference constructor parameters, дополнительный instance state и `__unserialize()` hydration отклоняются.
+В opt-in режиме class должен быть user-defined и non-anonymous; constructor — public; каждый parameter — public promoted concrete hook-free property. Variadic/by-reference constructor parameters, дополнительный instance state и `__unserialize()` hydration отклоняются. Неинициализированные PHP 8.4 lazy objects также отклоняются до чтения properties, чтобы `export()` и `supports()` не запускали initializer как побочный эффект.
 
 Generated expression повторно вызывает constructor. Generic reconstruction следует использовать только для value classes со стабильным constructor contract. Framework/cache descriptors предпочтительно экспортировать class-specific strategy.
 
