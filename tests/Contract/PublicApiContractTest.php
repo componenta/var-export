@@ -12,16 +12,14 @@ use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Contract\VarExporterInterface;
 use Componenta\VarExport\VarExporter;
-use ReflectionClass;
-use ReflectionMethod;
 
 it('keeps VarExporter focused on exporting one value', function (): void {
-    $reflection = new ReflectionClass(VarExporter::class);
+    $reflection = new \ReflectionClass(VarExporter::class);
     $methods = array_map(
-        static fn(ReflectionMethod $method): string => $method->getName(),
+        static fn(\ReflectionMethod $method): string => $method->getName(),
         array_filter(
-            $reflection->getMethods(ReflectionMethod::IS_PUBLIC),
-            static fn(ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === VarExporter::class,
+            $reflection->getMethods(\ReflectionMethod::IS_PUBLIC),
+            static fn(\ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === VarExporter::class,
         ),
     );
 
@@ -40,8 +38,8 @@ it('keeps exporter contracts limited to their single operation', function (): vo
 
     foreach ($contracts as $contract => $expectedMethods) {
         $methods = array_map(
-            static fn(ReflectionMethod $method): string => $method->getName(),
-            (new ReflectionClass($contract))->getMethods(ReflectionMethod::IS_PUBLIC),
+            static fn(\ReflectionMethod $method): string => $method->getName(),
+            (new \ReflectionClass($contract))->getMethods(\ReflectionMethod::IS_PUBLIC),
         );
         sort($methods);
 
