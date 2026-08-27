@@ -40,10 +40,14 @@ final class MagicConstantResolver extends NodeVisitorAbstract
             }
 
             $this->functionStack[] = $this->currentFunctionName;
+            $reflectionStartLine = $node->getAttribute(ClosureIndexingVisitor::REFLECTION_START_LINE_ATTRIBUTE);
+            $line = is_int($reflectionStartLine) && $reflectionStartLine > 0
+                ? $reflectionStartLine
+                : $node->getStartLine();
             $this->currentFunctionName = sprintf(
                 '{closure:%s:%d}',
                 $this->currentFunctionName,
-                $node->getStartLine(),
+                $line,
             );
 
             return null;
