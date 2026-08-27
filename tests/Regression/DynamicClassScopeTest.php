@@ -11,7 +11,7 @@ function dynamicClassDeclaredInsideFunctionClosure(): Closure
         {
             public static function make(): Closure
             {
-                return static fn(): string => __METHOD__;
+                return static fn(): string => __CLASS__;
             }
         }
     }
@@ -47,7 +47,7 @@ it('exports a closure from a named class declared inside a named function', func
     $restored = eval('return ' . Export::closure($closure) . ';');
 
     expect($restored())->toBe($expected)
-        ->and($expected)->toBe('ComponentaDynamicFunctionOwner::make');
+        ->and($expected)->toBe('ComponentaDynamicFunctionOwner');
 });
 
 it('exports a closure from a trait declared inside a named function', function (): void {
