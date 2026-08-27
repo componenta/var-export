@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Componenta\VarExport\ArrayExporter;
+use Componenta\VarExport\ClosureExporter;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
@@ -11,6 +13,8 @@ use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Contract\VarExporterInterface;
+use Componenta\VarExport\ExportContext;
+use Componenta\VarExport\ObjectExporter;
 use Componenta\VarExport\VarExporter;
 
 it('keeps VarExporter focused on exporting one value', function (): void {
@@ -28,33 +32,38 @@ it('keeps VarExporter focused on exporting one value', function (): void {
     expect($methods)->toBe(['__construct', 'export']);
 });
 
-it('keeps exporter contracts limited to their single operation', function (): void {
-    $contracts = [
-        ArrayExporterInterface::class => ['export'],
-        ClosureExporterInterface::class => ['export'],
-        ObjectExporterInterface::class => ['export'],
-        ValueFormatterInterface::class => ['format'],
-    ];
+it('keeps the object strategy contract to one operation', function (): void {
+    $methods = array_map(
+        static fn(\ReflectionMethod $method): string => $method->getName(),
+        (new \ReflectionClass(ObjectExporterInterface::class))->getMethods(\ReflectionMethod::IS_PUBLIC),
+    );
+    sort($methods);
 
-    foreach ($contracts as $contract => $expectedMethods) {
-        $methods = array_map(
-            static fn(\ReflectionMethod $method): string => $method->getName(),
-            (new \ReflectionClass($contract))->getMethods(\ReflectionMethod::IS_PUBLIC),
-        );
-        sort($methods);
-
-        expect($methods)->toBe($expectedMethods);
-    }
+    expect($methods)->toBe(['export']);
 });
 
-it('does not expose internal orchestration as contracts', function (): void {
+it('does not expose implementation decomposition as public contracts', function (): void {
     foreach ([
         VarExporterInterface::class,
+        ArrayExporterInterface::class,
+        ClosureExporterInterface::class,
+        ValueFormatterInterface::class,
         ContextualValueExporterInterface::class,
         ContextualClosureExporterInterface::class,
         ContextualObjectExporterInterface::class,
         ClosureSourceCacheInterface::class,
     ] as $contract) {
         expect(interface_exists($contract))->toBeFalse();
+    }
+});
+
+it('does not expose implementation helpers as root exporter classes', function (): void {
+    foreach ([
+        ArrayExporter::class,
+        ClosureExporter::class,
+        ObjectExporter::class,
+        ExportContext::class,
+    ] as $class) {
+        expect(class_exists($class))->toBeFalse();
     }
 });
