@@ -17,6 +17,7 @@ use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Property;
 use PhpParser\Node\Stmt\Trait_;
 use PhpParser\NodeVisitorAbstract;
+use PhpParser\Token;
 
 /** @internal */
 final class ClosureIndexingVisitor extends NodeVisitorAbstract
@@ -55,6 +56,11 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     private string $method = '';
     private string $property = '';
     private int $closureDepth = 0;
+
+    /** @param list<Token> $tokens */
+    public function __construct(private readonly array $tokens = [])
+    {
+    }
 
     public function enterNode(Node $node): null
     {
@@ -124,7 +130,7 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             ++$this->closureDepth;
-            $this->candidates[$node->getStartLine()][] = new ClosureSourceCandidate(
+            $this->candidates[$this->reflectionStartLine($node)][] = new ClosureSourceCandidate(
                 $node,
                 $this->namespace,
                 $this->trait,
@@ -167,6 +173,31 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
     public function candidatesByLine(): array
     {
         return $this->candidates;
+    }
+
+    private function reflectionStartLine(Closure|ArrowFunction $node): int
+    {
+        if ($node->attrGroups === [] || $this->tokens === []) {
+            return $node->getStartLine();
+        }
+
+        $lastGroup = $node->attrGroups[array_key_last($node->attrGroups)];
+        $tokenPosition = $lastGroup->getEndTokenPos();
+        if ($tokenPosition < 0) {
+            return $node->getStartLine();
+        }
+
+        $tokenCount = count($this->tokens);
+        for (++$tokenPosition; $tokenPosition < $tokenCount; ++$tokenPosition) {
+            $token = $this->tokens[$tokenPosition];
+            if (in_array($token->id, [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            return $token->line;
+        }
+
+        return $node->getStartLine();
     }
 
     private function qualify(string $name): string
