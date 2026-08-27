@@ -22,7 +22,10 @@ final readonly class ObjectExporter implements ObjectExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
 
-    /** @param (Closure(): ArrayExporterInterface)|null $arrayExporterProvider */
+    /**
+     * @param (Closure(): ArrayExporterInterface)|null $arrayExporterProvider
+     * @param (Closure(mixed, ExportContext): string)|null $valueExporter
+     */
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
         ?ValueFormatterInterface $valueFormatter = null,
@@ -117,6 +120,7 @@ final readonly class ObjectExporter implements ObjectExporterInterface
         );
     }
 
+    /** @param Closure(mixed, ExportContext): string $valueExporter */
     public function withValueExporter(Closure $valueExporter): static
     {
         return new self(
