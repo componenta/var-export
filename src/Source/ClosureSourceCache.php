@@ -174,18 +174,19 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
             unset($this->cache[$path]);
         }
 
+        // A source may be allowed as a one-off parse while intentionally too
+        // large for the aggregate cache budget. Do not evict unrelated entries
+        // for a source that cannot itself be retained.
+        if ($entry['sourceBytes'] > $this->maxCachedSourceBytes) {
+            return;
+        }
+
         while (
             $this->cache !== []
             && (count($this->cache) >= $this->maxEntries
                 || $this->cachedSourceBytes + $entry['sourceBytes'] > $this->maxCachedSourceBytes)
         ) {
             $this->evictOldest();
-        }
-
-        // A source may be allowed as a one-off parse while intentionally too
-        // large for the aggregate cache budget. In that case do not retain it.
-        if ($entry['sourceBytes'] > $this->maxCachedSourceBytes) {
-            return;
         }
 
         $this->cache[$path] = $entry;
