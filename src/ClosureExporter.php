@@ -227,7 +227,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
             return false;
         }
 
-        if (!$this->attributesMatch($node->attrGroups, $reflection->getAttributes())) {
+        if (!$this->attributesMatch($node->attrGroups, $reflection->getAttributes(), $reflection, $deferredError)) {
             return false;
         }
 
@@ -257,7 +257,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                 return false;
             }
 
-            if (!$this->attributesMatch($nodeParameter->attrGroups, $parameter->getAttributes())) {
+            if (!$this->attributesMatch($nodeParameter->attrGroups, $parameter->getAttributes(), $reflection, $deferredError)) {
                 return false;
             }
 
@@ -367,8 +367,12 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
      * @param array<array-key, Node\AttributeGroup> $nodeGroups
      * @param list<\ReflectionAttribute<object>> $reflectionAttributes
      */
-    private function attributesMatch(array $nodeGroups, array $reflectionAttributes): bool
-    {
+    private function attributesMatch(
+        array $nodeGroups,
+        array $reflectionAttributes,
+        ReflectionFunction $reflection,
+        ?ClosureExportException &$deferredError,
+    ): bool {
         $nodeAttributes = [];
         foreach ($nodeGroups as $group) {
             foreach ($group->attrs as $attribute) {
@@ -394,8 +398,14 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                 return false;
             }
 
-            if ($nodeAttribute->args === [] || self::reflectionArgumentsMayExecute($reflectionArgumentSyntax)) {
+            if ($nodeAttribute->args === []) {
                 continue;
+            }
+
+            if (self::reflectionArgumentsMayExecute($reflectionArgumentSyntax)) {
+                $deferredError = self::unverifiableAttributeArguments($reflectionAttribute->getName(), $reflection);
+
+                return false;
             }
 
             $nodeArguments = [];
@@ -404,10 +414,14 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                     $key = $argument->name?->toString() ?? $argumentIndex;
                     $nodeArguments[$key] = (new ConstExprEvaluator())->evaluateSilently($argument->value);
                 }
-            } catch (ConstExprEvaluationException) {
-                // Some constant expressions (for example class constants) cannot be evaluated safely
-                // from the parsed source. Keep matching them by attribute name/count instead of executing code.
-                continue;
+            } catch (ConstExprEvaluationException $e) {
+                $deferredError = self::unverifiableAttributeArguments(
+                    $reflectionAttribute->getName(),
+                    $reflection,
+                    $e,
+                );
+
+                return false;
             }
 
             if (!self::sameValue($nodeArguments, $reflectionAttribute->getArguments())) {
@@ -416,6 +430,23 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
         }
 
         return true;
+    }
+
+    private static function unverifiableAttributeArguments(
+        string $attribute,
+        ReflectionFunction $reflection,
+        ?Throwable $previous = null,
+    ): ClosureExportException {
+        return new ClosureExportException(
+            sprintf(
+                'Cannot verify closure or parameter attribute arguments for "%s" without executing or autoloading user code.',
+                $attribute,
+            ),
+            ['attribute' => $attribute, 'closure' => $reflection->getName()],
+            $reflection->getFileName() ?: null,
+            $reflection->getStartLine() ?: null,
+            $previous,
+        );
     }
 
     /**
