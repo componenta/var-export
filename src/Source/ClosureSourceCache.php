@@ -153,7 +153,7 @@ class ClosureSourceCache implements ClosureSourceCacheInterface
         /** @var array<Stmt> $resolved */
         $resolved = $resolver->traverse($ast);
 
-        $visitor = new ClosureIndexingVisitor($parser->getTokens());
+        $visitor = new ClosureIndexingVisitor(array_values($parser->getTokens()));
         (new NodeTraverser($visitor))->traverse($resolved);
 
         return $visitor->candidatesByLine();
