@@ -191,14 +191,17 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
             return $node->getStartLine();
         }
 
-        $tokenCount = count($this->tokens);
-        for (++$tokenPosition; $tokenPosition < $tokenCount; ++$tokenPosition) {
-            $token = $this->tokens[$tokenPosition];
-            if (in_array($token->id, [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
-                continue;
-            }
+        $endTokenPosition = $node->getEndTokenPos();
+        if ($endTokenPosition < $tokenPosition) {
+            return $node->getStartLine();
+        }
 
-            return $token->line;
+        $declarationToken = $node instanceof ArrowFunction ? T_FN : T_FUNCTION;
+        for (++$tokenPosition; $tokenPosition <= $endTokenPosition; ++$tokenPosition) {
+            $token = $this->tokens[$tokenPosition] ?? null;
+            if ($token !== null && $token->id === $declarationToken) {
+                return $token->line;
+            }
         }
 
         return $node->getStartLine();
