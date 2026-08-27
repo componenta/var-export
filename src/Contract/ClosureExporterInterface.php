@@ -5,15 +5,9 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Contract;
 
 use Closure;
-use Componenta\VarExport\Config\ExportConfig;
 
 interface ClosureExporterInterface
 {
     /** @throws ExceptionInterface */
     public function export(Closure $closure): string;
-
-    /** @throws ExceptionInterface */
-    public function exportWithDepth(Closure $closure, int $depth): string;
-
-    public function withConfig(ExportConfig $config): static;
 }
