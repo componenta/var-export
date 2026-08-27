@@ -6,12 +6,10 @@ namespace Componenta\VarExport;
 
 use Closure;
 use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureSourceCacheInterface;
 use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
 use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
 use Componenta\VarExport\Contract\ContextualValueExporterInterface;
-use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Contract\VarExporterInterface;
 use Componenta\VarExport\Exception\ExportException;
@@ -107,20 +105,5 @@ final readonly class VarExporter implements VarExporterInterface, ContextualValu
     public function getConfig(): ExportConfig
     {
         return $this->config;
-    }
-
-    public function getArrayExporter(): ArrayExporterInterface
-    {
-        return $this->arrayExporter;
-    }
-
-    public function getClosureExporter(): ContextualClosureExporterInterface
-    {
-        return $this->closureExporter;
-    }
-
-    public function getObjectExporter(): ObjectExporterInterface
-    {
-        return $this->objectExporter;
     }
 }
