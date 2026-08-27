@@ -37,7 +37,7 @@ final class ClosureExporterTest extends TestCase
         self::assertSame(5, $restored());
     }
 
-    public function testPreserveKeepsLexicalCaptureAndRuntimeBehavior(): void
+    public function testPreserveReadsCaptureFromReconstructionScope(): void
     {
         $value = 42;
         $closure = static function () use ($value): int {
@@ -45,10 +45,11 @@ final class ClosureExporterTest extends TestCase
         };
         $exporter = new ClosureExporter(new ExportConfig(closureUseMode: ClosureUseMode::Preserve));
         $code = $exporter->export($closure);
+
+        $value = 99;
         $restored = eval('return ' . $code . ';');
 
-        self::assertStringContainsString('use ($value)', $code);
-        self::assertSame(42, $restored());
+        self::assertSame(99, $restored());
     }
 
     public function testInlineRejectsByReferenceCapture(): void
@@ -92,7 +93,7 @@ final class ClosureExporterTest extends TestCase
         self::assertSame(42, $restored());
     }
 
-    public function testWithConfigAppliesNewUseModeWithoutChangingOriginalExporter(): void
+    public function testWithConfigChangesCaptureSemanticsWithoutChangingOriginalExporter(): void
     {
         $value = 7;
         $closure = static function () use ($value): int {
@@ -103,13 +104,13 @@ final class ClosureExporterTest extends TestCase
 
         $inlineCode = $inline->export($closure);
         $preserveCode = $preserve->export($closure);
+
+        $value = 99;
         $inlineRestored = eval('return ' . $inlineCode . ';');
         $preserveRestored = eval('return ' . $preserveCode . ';');
 
-        self::assertStringNotContainsString('use ($value)', $inlineCode);
-        self::assertStringContainsString('use ($value)', $preserveCode);
         self::assertSame(7, $inlineRestored());
-        self::assertSame(7, $preserveRestored());
+        self::assertSame(99, $preserveRestored());
     }
 
     public function testArrowFunctionTypesAndGlobalFunctionsRoundTrip(): void
