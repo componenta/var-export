@@ -8,9 +8,6 @@ use Closure;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
-use Componenta\VarExport\Contract\ContextualClosureExporterInterface;
-use Componenta\VarExport\Contract\ContextualObjectExporterInterface;
-use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Exception\ArrayExportException;
@@ -27,7 +24,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         private ?ClosureExporterInterface $closureExporter = null,
         private ?ObjectExporterInterface $objectExporter = null,
         ?ValueFormatterInterface $valueFormatter = null,
-        private ?ContextualValueExporterInterface $valueExporter = null,
+        private ?Closure $valueExporter = null,
     ) {
         $this->valueFormatter = $valueFormatter ?? new ValueFormatter();
     }
@@ -56,12 +53,18 @@ final readonly class ArrayExporter implements ArrayExporterInterface
 
     public function withConfig(ExportConfig $config): static
     {
+        $closureExporter = $this->closureExporter instanceof ClosureExporter
+            ? $this->closureExporter->withConfig($config)
+            : $this->closureExporter;
+        $objectExporter = $this->objectExporter instanceof ObjectExporter
+            ? $this->objectExporter->withConfig($config)
+            : $this->objectExporter;
+
         return new self(
             $config,
-            $this->closureExporter?->withConfig($config),
-            $this->objectExporter?->withConfig($config),
+            $closureExporter,
+            $objectExporter,
             $this->valueFormatter,
-            null,
         );
     }
 
@@ -139,14 +142,11 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         }
 
         if ($this->valueExporter !== null) {
-            return $this->valueExporter->exportValue($value, $context);
+            return ($this->valueExporter)($value, $context);
         }
 
         return match (true) {
-            is_null($value) => $this->valueFormatter->formatNull(),
-            is_bool($value) => $this->valueFormatter->formatBool($value),
-            is_int($value), is_float($value) => $this->valueFormatter->formatNumeric($value),
-            is_string($value) => $this->valueFormatter->escapeString($value),
+            $value === null, is_bool($value), is_int($value), is_float($value), is_string($value) => $this->valueFormatter->format($value),
             is_array($value) => $this->formatArray($value, $context),
             $value instanceof Closure => $this->formatClosure($value, $key, $context),
             is_object($value) => $this->formatObject($value, $key, $context),
@@ -171,9 +171,9 @@ final readonly class ArrayExporter implements ArrayExporterInterface
             throw ArrayExportException::closureExporterMissing($key, $context->depth, $context->path);
         }
 
-        return $this->closureExporter instanceof ContextualClosureExporterInterface
+        return $this->closureExporter instanceof ClosureExporter
             ? $this->closureExporter->exportWithContext($closure, $context)
-            : $this->closureExporter->exportWithDepth($closure, $context->depth);
+            : $this->closureExporter->export($closure);
     }
 
     private function formatObject(object $object, int|string $key, ExportContext $context): string
@@ -188,11 +188,9 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         }
 
         try {
-            if ($this->objectExporter instanceof ContextualObjectExporterInterface) {
-                return $this->objectExporter->exportWithContext($object, $context);
-            }
-
-            return $this->objectExporter->exportWithDepth($object, $context->depth);
+            return $this->objectExporter instanceof ObjectExporter
+                ? $this->objectExporter->exportWithContext($object, $context)
+                : $this->objectExporter->export($object);
         } catch (Throwable $e) {
             throw ArrayExportException::unexportableElement(
                 $key,
@@ -206,7 +204,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
 
     private function formatKey(int|string $key): string
     {
-        return is_int($key) ? (string) $key : $this->valueFormatter->escapeString($key);
+        return $this->valueFormatter->format($key);
     }
 
     /**
