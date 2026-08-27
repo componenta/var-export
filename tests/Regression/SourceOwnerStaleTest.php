@@ -45,6 +45,25 @@ it('rejects class owners whose names only match as a suffix', function (): void 
     }
 });
 
+it('rejects a named class owner replaced by an anonymous class with the same method', function (): void {
+    $file = sys_get_temp_dir() . '/componenta_anonymous_owner_' . bin2hex(random_bytes(6)) . '.php';
+    $suffix = bin2hex(random_bytes(5));
+    $class = 'ComponentaVarExportNamedOwner' . $suffix;
+
+    try {
+        file_put_contents($file, "<?php class {$class} { public static function make(): \\Closure { return static fn(): string => __METHOD__; } } return {$class}::make();");
+        /** @var Closure $closure */
+        $closure = require $file;
+
+        file_put_contents($file, "<?php return (new class { public function make(): \\Closure { return static fn(): string => __METHOD__; } })->make();");
+
+        expect(fn() => Export::closure($closure))
+            ->toThrow(ClosureExportException::class, 'no longer matches');
+    } finally {
+        @unlink($file);
+    }
+});
+
 it('rejects a method owner changed on disk after the runtime closure was created', function (): void {
     $file = sys_get_temp_dir() . '/componenta_method_owner_' . bin2hex(random_bytes(6)) . '.php';
     $suffix = bin2hex(random_bytes(5));

@@ -337,7 +337,11 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                 return str_starts_with($name, $candidate->class . '::' . $candidate->method . '():');
             }
 
-            return str_contains($name, '::' . $candidate->method . '():');
+            $scope = $reflection->getClosureScopeClass();
+
+            return $scope !== null
+                && $scope->isAnonymous()
+                && str_contains($name, '::' . $candidate->method . '():');
         }
 
         if ($candidate->class !== '') {
