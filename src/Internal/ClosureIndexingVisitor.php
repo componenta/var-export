@@ -22,6 +22,8 @@ use PhpParser\Token;
 /** @internal */
 final class ClosureIndexingVisitor extends NodeVisitorAbstract
 {
+    public const string REFLECTION_START_LINE_ATTRIBUTE = 'componentaReflectionStartLine';
+
     /** @var array<int, list<ClosureSourceCandidate>> */
     private array $candidates = [];
 
@@ -130,7 +132,9 @@ final class ClosureIndexingVisitor extends NodeVisitorAbstract
 
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             ++$this->closureDepth;
-            $this->candidates[$this->reflectionStartLine($node)][] = new ClosureSourceCandidate(
+            $reflectionStartLine = $this->reflectionStartLine($node);
+            $node->setAttribute(self::REFLECTION_START_LINE_ATTRIBUTE, $reflectionStartLine);
+            $this->candidates[$reflectionStartLine][] = new ClosureSourceCandidate(
                 $node,
                 $this->namespace,
                 $this->trait,
