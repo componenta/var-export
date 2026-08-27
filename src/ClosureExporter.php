@@ -7,10 +7,10 @@ namespace Componenta\VarExport;
 use Closure;
 use Componenta\VarExport\Config\ClosureUseMode;
 use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Contract\ClosureExporterInterface;
 use Componenta\VarExport\Exception\ClosureExportException;
 use Componenta\VarExport\Internal\ClosurePortabilityAnalyzer;
 use Componenta\VarExport\Internal\ClosureValidator;
+use Componenta\VarExport\Internal\ExportContext;
 use Componenta\VarExport\Internal\MagicConstantResolver;
 use Componenta\VarExport\Internal\SourceSymbolResolver;
 use Componenta\VarExport\Internal\UseVariableInliner;
@@ -46,7 +46,7 @@ use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
 
-final readonly class ClosureExporter implements ClosureExporterInterface
+final readonly class ClosureExporter
 {
     private ClosureValidator $validator;
     private UseVariableInliner $inliner;
@@ -66,28 +66,10 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         ]);
     }
 
-    public function export(Closure $closure): string
+    public function export(Closure $closure, ?ExportContext $context = null): string
     {
-        return $this->exportWithContext($closure, ExportContext::root());
-    }
+        $context ??= ExportContext::root();
 
-    public function exportWithDepth(Closure $closure, int $depth): string
-    {
-        if ($depth < 0) {
-            throw new ClosureExportException(
-                sprintf('Depth must be non-negative; got %d.', $depth),
-                ['depth' => $depth],
-            );
-        }
-
-        return $this->exportWithContext(
-            $closure,
-            new ExportContext($depth, baseIndent: str_repeat($this->config->indent, $depth)),
-        );
-    }
-
-    public function exportWithContext(Closure $closure, ExportContext $context): string
-    {
         if ($context->depth > $this->config->maxDepth) {
             throw ClosureExportException::nestingDepthExceeded(
                 $this->config->maxDepth,
@@ -132,11 +114,6 @@ final readonly class ClosureExporter implements ClosureExporterInterface
         } catch (Throwable $e) {
             throw ClosureExportException::internalFailure($reflection, $e);
         }
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return new self($config, $this->sourceCache);
     }
 
     private function assertPortableExpression(
