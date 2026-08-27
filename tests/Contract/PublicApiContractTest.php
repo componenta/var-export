@@ -30,16 +30,31 @@ it('keeps VarExporter focused on exporting one value', function (): void {
     expect($methods)->toBe(['__construct', 'export']);
 });
 
-it('does not expose internal composition details as contracts', function (): void {
+it('keeps exporter contracts limited to their single operation', function (): void {
+    $contracts = [
+        ArrayExporterInterface::class => ['export'],
+        ClosureExporterInterface::class => ['export'],
+        ObjectExporterInterface::class => ['export'],
+        ValueFormatterInterface::class => ['format'],
+    ];
+
+    foreach ($contracts as $contract => $expectedMethods) {
+        $methods = array_map(
+            static fn(ReflectionMethod $method): string => $method->getName(),
+            (new ReflectionClass($contract))->getMethods(ReflectionMethod::IS_PUBLIC),
+        );
+        sort($methods);
+
+        expect($methods)->toBe($expectedMethods);
+    }
+});
+
+it('does not expose internal orchestration as contracts', function (): void {
     foreach ([
         VarExporterInterface::class,
-        ArrayExporterInterface::class,
-        ClosureExporterInterface::class,
-        ObjectExporterInterface::class,
         ContextualValueExporterInterface::class,
         ContextualClosureExporterInterface::class,
         ContextualObjectExporterInterface::class,
-        ValueFormatterInterface::class,
         ClosureSourceCacheInterface::class,
     ] as $contract) {
         expect(interface_exists($contract))->toBeFalse();
