@@ -19,6 +19,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
 {
     private ValueFormatterInterface $valueFormatter;
 
+    /** @param (Closure(mixed, ExportContext): string)|null $valueExporter */
     public function __construct(
         private ExportConfig $config = new ExportConfig(),
         private ?ClosureExporterInterface $closureExporter = null,
