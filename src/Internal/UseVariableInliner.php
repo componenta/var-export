@@ -34,6 +34,7 @@ final readonly class UseVariableInliner
         int $captureDepth = 1,
         ?string $filename = null,
         ?int $line = null,
+        bool $sortKeys = false,
     ): Node\Expr {
         if ($variables === []) {
             return $closure;
@@ -50,6 +51,7 @@ final readonly class UseVariableInliner
                     depth: $captureDepth,
                     filename: $filename,
                     line: $line,
+                    sortKeys: $sortKeys,
                 ),
             ));
         }

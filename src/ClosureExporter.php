@@ -117,6 +117,7 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
                     captureDepth: $context->depth + 1,
                     filename: $reflection->getFileName() ?: null,
                     line: $reflection->getStartLine() ?: null,
+                    sortKeys: $this->config->sortKeys,
                 );
             }
 
@@ -317,33 +318,43 @@ final readonly class ClosureExporter implements ContextualClosureExporterInterfa
 
     private function sourceOwnerMatches(ClosureSourceCandidate $candidate, ReflectionFunction $reflection): bool
     {
-        $name = $reflection->getName();
+        $name = self::unwrapClosureName($reflection->getName());
 
         if ($candidate->function !== '') {
-            return str_starts_with($name, '{closure:' . $candidate->function . '():');
+            return str_starts_with($name, $candidate->function . '():');
         }
 
         if ($candidate->trait !== '') {
             if ($candidate->method !== '') {
-                return str_starts_with($name, '{closure:' . $candidate->trait . '::' . $candidate->method . '():');
+                return str_starts_with($name, $candidate->trait . '::' . $candidate->method . '():');
             }
 
-            return str_starts_with($name, '{closure:' . $candidate->trait . '::');
+            return str_starts_with($name, $candidate->trait . '::');
         }
 
         if ($candidate->method !== '') {
             if ($candidate->class !== '') {
-                return str_starts_with($name, '{closure:' . $candidate->class . '::' . $candidate->method . '():');
+                return str_starts_with($name, $candidate->class . '::' . $candidate->method . '():');
             }
 
             return str_contains($name, '::' . $candidate->method . '():');
         }
 
         if ($candidate->class !== '') {
-            return str_starts_with($name, '{closure:' . $candidate->class . '::');
+            return str_starts_with($name, $candidate->class . '::');
         }
 
         return true;
+    }
+
+    private static function unwrapClosureName(string $name): string
+    {
+        $prefix = '{closure:';
+        while (str_starts_with($name, $prefix)) {
+            $name = substr($name, strlen($prefix));
+        }
+
+        return $name;
     }
 
     /**

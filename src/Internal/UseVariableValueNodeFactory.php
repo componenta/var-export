@@ -28,6 +28,7 @@ final class UseVariableValueNodeFactory
         array $path = [],
         ?string $filename = null,
         ?int $line = null,
+        bool $sortKeys = false,
     ): Node\Expr {
         if ($depth > $maxDepth) {
             throw ClosureExportException::captureDepthExceeded(
@@ -50,7 +51,16 @@ final class UseVariableValueNodeFactory
                 new FullyQualified($value::class),
                 new Node\Identifier($value->name),
             ),
-            is_array($value) => self::arrayNode($value, $variable, $maxDepth, $depth, $path, $filename, $line),
+            is_array($value) => self::arrayNode(
+                $value,
+                $variable,
+                $maxDepth,
+                $depth,
+                $path,
+                $filename,
+                $line,
+                $sortKeys,
+            ),
             default => throw ClosureExportException::captureValueNotExportable(
                 $variable,
                 self::type($value),
@@ -90,11 +100,12 @@ final class UseVariableValueNodeFactory
         array $path,
         ?string $filename,
         ?int $line,
+        bool $sortKeys,
     ): Node\Expr\Array_ {
         $items = [];
         $isList = array_is_list($array);
 
-        foreach ($array as $key => $value) {
+        foreach (ArrayKeyOrder::orderedKeys($array, $sortKeys) as $key) {
             $itemPath = [...$path, $key];
 
             if (\ReflectionReference::fromArrayElement($array, $key) !== null) {
@@ -109,15 +120,25 @@ final class UseVariableValueNodeFactory
 
             $keyNode = $isList
                 ? null
-                : self::fromValue($key, $variable, $maxDepth, $depth + 1, $itemPath, $filename, $line);
+                : self::fromValue(
+                    $key,
+                    $variable,
+                    $maxDepth,
+                    $depth + 1,
+                    $itemPath,
+                    $filename,
+                    $line,
+                    $sortKeys,
+                );
             $valueNode = self::fromValue(
-                $value,
+                $array[$key],
                 $variable,
                 $maxDepth,
                 $depth + 1,
                 $itemPath,
                 $filename,
                 $line,
+                $sortKeys,
             );
             $items[] = new Node\ArrayItem($valueNode, $keyNode);
         }

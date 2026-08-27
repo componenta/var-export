@@ -14,6 +14,7 @@ use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Contract\ValueFormatterInterface;
 use Componenta\VarExport\Exception\ArrayExportException;
+use Componenta\VarExport\Internal\ArrayKeyOrder;
 use Componenta\VarExport\Internal\ValueFormatter;
 use Throwable;
 
@@ -80,7 +81,7 @@ final readonly class ArrayExporter implements ArrayExporterInterface
         }
 
         $isList = array_is_list($array);
-        $keys = $this->orderedKeys($array);
+        $keys = ArrayKeyOrder::orderedKeys($array, $this->config->sortKeys);
 
         return $this->config->isPretty()
             ? $this->formatPretty($array, $keys, $isList, $context)
@@ -206,37 +207,6 @@ final readonly class ArrayExporter implements ArrayExporterInterface
     private function formatKey(int|string $key): string
     {
         return is_int($key) ? (string) $key : $this->valueFormatter->escapeString($key);
-    }
-
-    /**
-     * @param array<mixed> $array
-     * @return list<int|string>
-     */
-    private function orderedKeys(array $array): array
-    {
-        /** @var list<int|string> $keys */
-        $keys = array_keys($array);
-        if (!$this->config->sortKeys) {
-            return $keys;
-        }
-
-        usort($keys, static function (int|string $left, int|string $right): int {
-            if (is_int($left) && is_string($right)) {
-                return -1;
-            }
-            if (is_string($left) && is_int($right)) {
-                return 1;
-            }
-            if (is_int($left)) {
-                /** @var int $right */
-                return $left <=> $right;
-            }
-
-            /** @var string $right */
-            return strcmp($left, $right);
-        });
-
-        return $keys;
     }
 
     /**
