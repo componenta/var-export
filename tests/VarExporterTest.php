@@ -77,31 +77,33 @@ final class VarExporterTest extends TestCase
         yield 'with backslash' => ['a\\b', "'a\\\\b'"];
     }
 
-    public function testExportArray(): void
+    public function testExportArrayRoundTrips(): void
     {
-        $result = $this->exporter->export(['a' => 1, 'b' => 2]);
+        $value = ['a' => 1, 'b' => 2];
+        $code = $this->exporter->export($value);
 
-        self::assertSame("['a' => 1, 'b' => 2]", $result);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testExportClosureProducesEvaluableCode(): void
+    public function testExportClosureProducesEquivalentCallable(): void
     {
         $closure = static fn(int $x): int => $x * 2;
-
         $code = $this->exporter->export($closure);
-        $roundTripped = eval("return {$code};");
+        $roundTripped = eval('return ' . $code . ';');
 
         self::assertSame(14, $roundTripped(7));
     }
 
-    public function testExportStatement(): void
+    public function testExportStatementCanBeExecutedAsAStatementExpression(): void
     {
-        $result = $this->exporter->exportStatement(['key' => 'value']);
+        $value = ['key' => 'value'];
+        $statement = $this->exporter->exportStatement($value);
 
-        self::assertStringEndsWith(';', $result);
+        self::assertStringEndsWith(';', $statement);
+        self::assertSame($value, eval('return ' . $statement));
     }
 
-    public function testExportThrowsForObject(): void
+    public function testUnsupportedObjectThrowsTypedFailure(): void
     {
         $this->expectException(ExportException::class);
         $this->expectExceptionMessage('stdClass');
@@ -109,60 +111,56 @@ final class VarExporterTest extends TestCase
         $this->exporter->export(new \stdClass());
     }
 
-    public function testExportThrowsForResource(): void
+    public function testResourceThrowsTypedFailure(): void
     {
-        $this->expectException(ExportException::class);
-
         $resource = fopen('php://memory', 'r');
+
         try {
+            $this->expectException(ExportException::class);
             $this->exporter->export($resource);
         } finally {
             fclose($resource);
         }
     }
 
-    public function testWithConfigProducesIndependentInstanceUsingNewConfig(): void
+    public function testMaximumDepthAppliesToNestedValues(): void
     {
-        $prettyConfig = ExportConfig::pretty();
+        $exporter = new VarExporter(new ExportConfig(maxDepth: 1));
+
+        self::assertSame([1], eval('return ' . $exporter->export([1]) . ';'));
+
+        $this->expectException(ExportException::class);
+        $this->expectExceptionMessage('Maximum nesting depth');
+        $exporter->export([[1]]);
+    }
+
+    public function testWithConfigProducesIndependentExporterUsingNewBehavior(): void
+    {
         $original = new VarExporter(ExportConfig::compact());
+        $prettyConfig = ExportConfig::pretty();
         $pretty = $original->withConfig($prettyConfig);
 
         self::assertNotSame($original, $pretty);
         self::assertSame($prettyConfig, $pretty->getConfig());
         self::assertStringNotContainsString("\n", $original->export([1, 2]));
         self::assertStringContainsString("\n", $pretty->export([1, 2]));
+        self::assertSame([1, 2], eval('return ' . $pretty->export([1, 2]) . ';'));
     }
 
-    public function testGetConfigReturnsConstructionConfig(): void
+    public function testSortedKeysChangeGeneratedIterationOrderWithoutChangingValues(): void
     {
-        $config = ExportConfig::pretty();
-        $exporter = new VarExporter($config);
-
-        self::assertSame($config, $exporter->getConfig());
-    }
-
-    public function testExportWithPrettyConfig(): void
-    {
-        $exporter = new VarExporter(ExportConfig::pretty());
-
-        $result = $exporter->export([1, 2]);
-
-        self::assertStringContainsString("\n", $result);
-    }
-
-    public function testExportWithSortedKeys(): void
-    {
-        $config = new ExportConfig(sortKeys: true);
-        $exporter = new VarExporter($config);
-
+        $exporter = new VarExporter(new ExportConfig(sortKeys: true));
         $result = $exporter->export(['z' => 1, 'a' => 2]);
 
         $aPos = strpos($result, "'a'");
         $zPos = strpos($result, "'z'");
+        self::assertIsInt($aPos);
+        self::assertIsInt($zPos);
         self::assertLessThan($zPos, $aPos);
+        self::assertSame(['a' => 2, 'z' => 1], eval('return ' . $result . ';'));
     }
 
-    public function testExportNestedStructure(): void
+    public function testNestedStructureRoundTripsExactly(): void
     {
         $data = [
             'users' => [
@@ -172,22 +170,17 @@ final class VarExporterTest extends TestCase
             'count' => 2,
         ];
 
-        $result = $this->exporter->export($data);
-
-        self::assertStringContainsString("'users'", $result);
-        self::assertStringContainsString("'Alice'", $result);
-        self::assertStringContainsString("'count' => 2", $result);
+        self::assertSame($data, eval('return ' . $this->exporter->export($data) . ';'));
     }
 
-    public function testExportArrayWithClosuresRoundTrips(): void
+    public function testArrayWithClosuresRoundTripsBehavior(): void
     {
         $data = [
             'handler' => static fn(int $x): int => $x * 2,
             'value' => 42,
         ];
 
-        $code = $this->exporter->export($data);
-        $evaluated = eval("return {$code};");
+        $evaluated = eval('return ' . $this->exporter->export($data) . ';');
 
         self::assertSame(42, $evaluated['value']);
         self::assertSame(10, $evaluated['handler'](5));

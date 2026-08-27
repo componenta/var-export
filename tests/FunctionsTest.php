@@ -14,79 +14,90 @@ use function Componenta\VarExport\var_export_string;
 
 final class FunctionsTest extends TestCase
 {
-    public function testVarExportString(): void
+    public function testVarExportStringRoundTripsArray(): void
     {
-        $result = var_export_string(['a' => 1]);
+        $value = ['a' => 1];
+        $code = var_export_string($value);
 
-        self::assertSame("['a' => 1]", $result);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testVarExportStringPretty(): void
+    public function testVarExportStringPrettyRoundTripsWithPrettyFormatting(): void
     {
-        $result = var_export_string([1, 2], pretty: true);
+        $value = [1, 2];
+        $code = var_export_string($value, pretty: true);
 
-        self::assertStringContainsString("\n", $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testVarExportStringWithConfig(): void
+    public function testVarExportStringAppliesExplicitConfig(): void
     {
         $config = new ExportConfig(sortKeys: true);
-        $result = var_export_string(['z' => 1, 'a' => 2], $config);
+        $code = var_export_string(['z' => 1, 'a' => 2], $config);
+        $aPos = strpos($code, "'a'");
+        $zPos = strpos($code, "'z'");
 
-        $aPos = strpos($result, "'a'");
-        $zPos = strpos($result, "'z'");
+        self::assertIsInt($aPos);
+        self::assertIsInt($zPos);
         self::assertLessThan($zPos, $aPos);
+        self::assertSame(['a' => 2, 'z' => 1], eval('return ' . $code . ';'));
     }
 
-    public function testVarExportPretty(): void
+    public function testVarExportPrettyRoundTrips(): void
     {
-        $result = var_export_pretty([1, 2, 3]);
+        $value = [1, 2, 3];
+        $code = var_export_pretty($value);
 
-        self::assertStringContainsString("\n", $result);
-        self::assertStringContainsString('1', $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testArrayExport(): void
+    public function testArrayExportRoundTripsCompactArray(): void
     {
-        $result = array_export([1, 2, 3]);
+        $value = [1, 2, 3];
+        $code = array_export($value);
 
-        self::assertSame('[1, 2, 3]', $result);
+        self::assertSame('[1, 2, 3]', $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testArrayExportPretty(): void
+    public function testArrayExportPrettyRoundTrips(): void
     {
-        $result = array_export([1, 2], pretty: true);
+        $value = [1, 2];
+        $code = array_export($value, pretty: true);
 
-        self::assertStringContainsString("\n", $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame($value, eval('return ' . $code . ';'));
     }
 
-    public function testClosureExport(): void
+    public function testClosureExportProducesEquivalentArrowFunction(): void
     {
-        $closure = static fn() => 42;
+        $closure = static fn(int $value): int => $value + 1;
+        $code = closure_export($closure);
+        $restored = eval('return ' . $code . ';');
 
-        $result = closure_export($closure);
-
-        self::assertStringContainsString('fn', $result);
-        self::assertStringContainsString('42', $result);
+        self::assertSame(42, $restored(41));
     }
 
-    public function testClosureExportPretty(): void
+    public function testClosureExportPrettyProducesEquivalentClosure(): void
     {
-        $closure = static function () {
-            return 42;
+        $closure = static function (int $value): int {
+            return $value * 2;
         };
+        $code = closure_export($closure, pretty: true);
+        $restored = eval('return ' . $code . ';');
 
-        $result = closure_export($closure, pretty: true);
-
-        self::assertStringContainsString('function', $result);
+        self::assertStringContainsString("\n", $code);
+        self::assertSame(10, $restored(5));
     }
 
-    public function testVarExportStringScalars(): void
+    public function testVarExportStringScalarsUseExecutableRepresentations(): void
     {
-        self::assertSame('null', var_export_string(null));
-        self::assertSame('true', var_export_string(true));
-        self::assertSame('false', var_export_string(false));
-        self::assertSame('42', var_export_string(42));
-        self::assertSame("'hello'", var_export_string('hello'));
+        self::assertNull(eval('return ' . var_export_string(null) . ';'));
+        self::assertTrue(eval('return ' . var_export_string(true) . ';'));
+        self::assertFalse(eval('return ' . var_export_string(false) . ';'));
+        self::assertSame(42, eval('return ' . var_export_string(42) . ';'));
+        self::assertSame('hello', eval('return ' . var_export_string('hello') . ';'));
     }
 }
