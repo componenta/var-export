@@ -9,53 +9,26 @@ use Componenta\VarExport\ArrayExporter;
 use Componenta\VarExport\Config\ExportConfig;
 use Componenta\VarExport\Contract\ArrayExporterInterface;
 use Componenta\VarExport\Contract\ClosureExporterInterface;
-use Componenta\VarExport\Contract\ContextualValueExporterInterface;
 use Componenta\VarExport\Contract\ObjectExporterInterface;
 use Componenta\VarExport\Exception\ArrayExportException;
 use Componenta\VarExport\Exception\ExportException;
-use Componenta\VarExport\ExportContext;
 use Componenta\VarExport\ObjectExporter;
 use RuntimeException;
 use stdClass;
 
-final class LegacyClosureStrategy implements ClosureExporterInterface
+final class CustomClosureStrategy implements ClosureExporterInterface
 {
     public function export(Closure $closure): string
     {
         return 'static fn (): int => 7';
     }
-
-    public function exportWithDepth(Closure $closure, int $depth): string
-    {
-        return $this->export($closure);
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return new self();
-    }
 }
 
-final class LegacyObjectStrategy implements ObjectExporterInterface
+final class CustomObjectStrategy implements ObjectExporterInterface
 {
     public function export(object $object): string
     {
         return 'new \\stdClass()';
-    }
-
-    public function exportWithDepth(object $object, int $depth): string
-    {
-        return $this->export($object);
-    }
-
-    public function supports(object $object): bool
-    {
-        return true;
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return new self();
     }
 }
 
@@ -65,29 +38,6 @@ final class ThrowingObjectStrategy implements ObjectExporterInterface
     {
         throw new RuntimeException('custom object exporter failed');
     }
-
-    public function exportWithDepth(object $object, int $depth): string
-    {
-        return $this->export($object);
-    }
-
-    public function supports(object $object): bool
-    {
-        return true;
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return new self();
-    }
-}
-
-final class LocationValueStrategy implements ContextualValueExporterInterface
-{
-    public function exportValue(mixed $value, ExportContext $context): string
-    {
-        return var_export($context->location(), true);
-    }
 }
 
 final class ReplacementArrayStrategy implements ArrayExporterInterface
@@ -95,16 +45,6 @@ final class ReplacementArrayStrategy implements ArrayExporterInterface
     public function export(array $array): string
     {
         return '[99]';
-    }
-
-    public function exportAtDepth(array $array, int $depth, string $baseIndent): string
-    {
-        return $this->export($array);
-    }
-
-    public function withConfig(ExportConfig $config): static
-    {
-        return $this;
     }
 }
 
@@ -115,10 +55,10 @@ final readonly class ArrayProviderValue
     }
 }
 
-it('supports legacy low-level closure and object strategies through their public contracts', function (): void {
+it('uses minimal closure and object strategy contracts', function (): void {
     $exporter = new ArrayExporter(
-        closureExporter: new LegacyClosureStrategy(),
-        objectExporter: new LegacyObjectStrategy(),
+        closureExporter: new CustomClosureStrategy(),
+        objectExporter: new CustomObjectStrategy(),
     );
 
     $code = $exporter->export([
@@ -129,16 +69,6 @@ it('supports legacy low-level closure and object strategies through their public
 
     expect($restored['closure']())->toBe(7)
         ->and($restored['object'])->toBeInstanceOf(stdClass::class);
-});
-
-it('propagates semantic locations to a contextual value strategy', function (): void {
-    $exporter = new ArrayExporter(valueExporter: new LocationValueStrategy());
-    $restored = eval('return ' . $exporter->export(['a' => 1, 'b' => false]) . ';');
-
-    expect($restored)->toBe([
-        'a' => "\$value['a']",
-        'b' => "\$value['b']",
-    ]);
 });
 
 it('reports stream and closed-resource array elements through the public array boundary', function (): void {
@@ -166,7 +96,7 @@ it('retains a custom object-strategy failure as the previous exception', functio
     }
 });
 
-it('uses a custom public array strategy when reconstructing readonly object arguments', function (): void {
+it('uses a custom array strategy when reconstructing readonly object arguments', function (): void {
     $config = (new ExportConfig())->withGenericReadonlyObjects();
     $exporter = new ObjectExporter(
         $config,
@@ -190,8 +120,8 @@ it('rejects an invalid custom array-strategy provider with a typed export failur
         ->toThrow(ExportException::class, 'array provider must return');
 });
 
-it('uses a supplied closure strategy at the public object-export boundary', function (): void {
-    $exporter = new ObjectExporter(closureExporter: new LegacyClosureStrategy());
+it('uses a supplied closure strategy at the object-export boundary', function (): void {
+    $exporter = new ObjectExporter(closureExporter: new CustomClosureStrategy());
     $restored = eval('return ' . $exporter->export(static fn(): int => 1) . ';');
 
     expect($restored())->toBe(7);
