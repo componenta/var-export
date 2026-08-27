@@ -75,7 +75,6 @@ final readonly class VarExporter
             is_array($value) => $this->arrayExporter->exportWithContext($value, $context),
             $value instanceof Closure => $this->closureExporter->exportWithContext($value, $context),
             $value instanceof UnitEnum => '\\' . $value::class . '::' . $value->name,
-            $value instanceof ObjectExporterInterface => $this->objectExporter->export($value),
             is_object($value) => $this->objectExporter instanceof ObjectExporter
                 ? $this->objectExporter->exportWithContext($value, $context)
                 : $this->objectExporter->export($value),
