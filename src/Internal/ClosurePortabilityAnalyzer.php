@@ -4,233 +4,172 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Internal;
 
-use Componenta\VarExport\Config\ClosureExportPolicy;
-use Componenta\VarExport\Config\SourcePathPolicy;
-use Componenta\VarExport\Exception\ClosureExportException;
+use Componenta\VarExport\Exception\ExportException;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\Eval_;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\Include_;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Scalar\MagicConst;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\InlineHTML;
+use PhpParser\Node\Stmt\Static_;
 use PhpParser\NodeVisitorAbstract;
 use ReflectionFunction;
-use Throwable;
 
 final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 {
     public function __construct(
-        private readonly ClosureExportPolicy $policy,
-        private readonly SourcePathPolicy $sourcePathPolicy,
-        private readonly ?string $filename = null,
-        private readonly ?int $line = null,
-        private readonly ?string $functionName = null,
+        private readonly string $filename,
+        private readonly int $line,
     ) {
     }
 
     public function enterNode(Node $node): null
     {
+        if ($node instanceof InlineHTML) {
+            throw $this->failure('PHP mode switches are not valid inside a standalone expression', $node);
+        }
+
         if ($node instanceof Function_ || $node instanceof ClassLike) {
-            throw ClosureExportException::nonPortableExpression(
-                $node instanceof Function_
-                    ? 'nested named function declarations cannot preserve their lexical declaration context in a standalone expression'
-                    : 'nested class-like declarations cannot preserve their lexical declaration identity in a standalone expression',
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
+            throw $this->failure('nested named declarations depend on their source environment', $node);
+        }
+
+        if ($node instanceof Static_) {
+            throw $this->failure('static local state cannot be reproduced safely', $node);
         }
 
         if ($node instanceof Include_) {
-            throw ClosureExportException::nonPortableExpression(
-                'include/require observes the generated artifact location and cannot be reproduced exactly after relocation',
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
+            throw $this->failure('include/require depends on the generated artifact location', $node);
         }
 
         if ($node instanceof Eval_) {
-            throw ClosureExportException::nonPortableExpression(
-                'eval() observes the generated artifact file/scope context and cannot be reproduced exactly after relocation',
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
+            throw $this->failure('eval() depends on its source file and scope context', $node);
         }
 
-        if (
-            ($this->policy === ClosureExportPolicy::PortableExpression
-                || $this->sourcePathPolicy === SourcePathPolicy::Reject)
-            && ($node instanceof MagicConst\Function_ || $node instanceof MagicConst\Method)
-            && $this->filename !== null
-            && $this->functionName !== null
-            && str_contains($this->functionName, $this->filename)
-        ) {
-            throw ClosureExportException::nonPortableExpression(
-                sprintf(
-                    '%s resolves to an anonymous-closure name containing the absolute source file path',
-                    $node instanceof MagicConst\Function_ ? '__FUNCTION__' : '__METHOD__',
-                ),
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
+        if ($node instanceof MagicConst) {
+            throw $this->failure(sprintf('%s is source-context dependent', $node->getName()), $node);
         }
 
-        if (
-            ($this->policy === ClosureExportPolicy::PortableExpression
-                || $this->sourcePathPolicy === SourcePathPolicy::Reject)
-            && ($node instanceof MagicConst\File || $node instanceof MagicConst\Dir)
-        ) {
-            throw ClosureExportException::nonPortableExpression(
-                sprintf('%s is source-root dependent', $node instanceof MagicConst\File ? '__FILE__' : '__DIR__'),
-                $this->filename,
-                $node->getStartLine() ?: $this->line,
-            );
-        }
+        if ($node instanceof Variable) {
+            if (!is_string($node->name)) {
+                throw $this->failure('dynamic variable access cannot be frozen safely', $node);
+            }
 
-        if ($this->policy !== ClosureExportPolicy::PortableExpression) {
-            return null;
+            if ($node->name === 'this') {
+                throw $this->failure('$this depends on object binding', $node);
+            }
         }
 
         if ($node instanceof FuncCall && $node->name instanceof Name) {
-            $this->assertPortableName($node->name, 'function', $node->getStartLine());
-            $this->assertFunctionIsNotSourceLocal($node->name, $node->getStartLine());
-
-            return null;
+            $node->name = $this->resolveFunction($node->name, $node);
         }
 
         if ($node instanceof ConstFetch) {
-            $name = strtolower($node->name->toString());
-            if (in_array($name, ['true', 'false', 'null'], true)) {
-                return null;
-            }
-
-            $this->assertPortableName($node->name, 'constant', $node->getStartLine());
-            $this->assertConstantIsNotRuntimeUserDefined($node->name, $node->getStartLine());
+            $node->name = $this->resolveConstant($node->name, $node);
         }
 
         return null;
     }
 
-    private function assertPortableName(Name $name, string $kind, int $line): void
+    private function resolveFunction(Name $name, Node $node): FullyQualified
     {
-        if ($name instanceof FullyQualified || $name instanceof Name\Relative) {
-            return;
+        $resolved = $this->resolvedName($name, true);
+        if (self::hasNamespaceFallback($name) && !function_exists($resolved)) {
+            throw $this->failure(
+                sprintf('unresolved unqualified function "%s" has namespace fallback semantics', $name),
+                $node,
+            );
         }
 
-        $namespaced = $name->getAttribute('namespacedName');
-        if (!$name->isUnqualified() || !$namespaced instanceof Name) {
-            return;
+        if (function_exists($resolved)) {
+            $reflection = new ReflectionFunction($resolved);
+            $definedIn = $reflection->getFileName();
+
+            if (
+                $definedIn !== false
+                && self::canonicalPath($definedIn) === self::canonicalPath($this->filename)
+            ) {
+                throw $this->failure(
+                    sprintf('function "%s" is defined in the closure provider source file', $resolved),
+                    $node,
+                );
+            }
         }
 
-        throw ClosureExportException::nonPortableExpression(
-            sprintf(
-                'unqualified %s "%s" inside namespace "%s" has PHP namespace fallback semantics; '
-                . 'use an imported or fully-qualified name',
-                $kind,
-                $name->toString(),
-                self::namespaceOf($namespaced),
-            ),
-            $this->filename,
-            $line ?: $this->line,
-        );
+        return new FullyQualified($resolved);
     }
 
-    private function assertFunctionIsNotSourceLocal(Name $name, int $line): void
+    private function resolveConstant(Name $name, Node $node): Name
     {
-        if ($this->filename === null) {
-            return;
+        if (in_array(strtolower($name->toString()), ['true', 'false', 'null'], true)) {
+            return $name;
         }
 
-        $function = $this->resolvedName($name);
-        if ($function === null || !function_exists($function)) {
-            return;
+        $resolved = $this->resolvedName($name, false);
+        if (self::hasNamespaceFallback($name) && !defined($resolved)) {
+            throw $this->failure(
+                sprintf('unresolved unqualified constant "%s" has namespace fallback semantics', $name),
+                $node,
+            );
         }
 
-        try {
-            $reflection = new ReflectionFunction($function);
-        } catch (Throwable) {
-            return;
+        $userConstants = get_defined_constants(true)['user'] ?? [];
+
+        if (array_key_exists($resolved, $userConstants)) {
+            throw $this->failure(
+                sprintf('runtime user-defined constant "%s" is not portable', $resolved),
+                $node,
+            );
         }
 
-        if ($reflection->isInternal()) {
-            return;
-        }
-
-        $functionFile = $reflection->getFileName();
-        if ($functionFile === false) {
-            return;
-        }
-
-        $source = realpath($this->filename) ?: $this->filename;
-        $definedIn = realpath($functionFile) ?: $functionFile;
-        if ($source !== $definedIn) {
-            return;
-        }
-
-        throw ClosureExportException::nonPortableExpression(
-            sprintf(
-                'function "%s" is defined in the closure provider source file and may not exist when the generated artifact is loaded',
-                ltrim($function, '\\'),
-            ),
-            $this->filename,
-            $line ?: $this->line,
-        );
+        return new FullyQualified($resolved);
     }
 
-    private function assertConstantIsNotRuntimeUserDefined(Name $name, int $line): void
-    {
-        $constant = $this->resolvedName($name);
-        if ($constant === null) {
-            return;
-        }
-
-        $constant = ltrim($constant, '\\');
-        $groups = get_defined_constants(true);
-        $userConstants = $groups['user'] ?? [];
-        if (!array_key_exists($constant, $userConstants)) {
-            return;
-        }
-
-        throw ClosureExportException::nonPortableExpression(
-            sprintf(
-                'runtime user-defined constant "%s" is not guaranteed to exist when the generated artifact is loaded; use a literal, enum, or class constant',
-                $constant,
-            ),
-            $this->filename,
-            $line ?: $this->line,
-        );
-    }
-
-    private function resolvedName(Name $name): ?string
+    private function resolvedName(Name $name, bool $function): string
     {
         if ($name instanceof FullyQualified) {
             return $name->toString();
         }
 
-        if ($name instanceof Name\Relative) {
-            return null;
+        $namespaced = $name->getAttribute('namespacedName');
+        if (
+            $namespaced instanceof Name
+            && ($function ? function_exists($namespaced->toString()) : defined($namespaced->toString()))
+        ) {
+            return $namespaced->toString();
         }
 
-        $resolved = $name->getAttribute('resolvedName');
-        if ($resolved instanceof Name) {
-            return $resolved->toString();
-        }
-
-        if (!$name->isUnqualified()) {
-            return $name->toString();
-        }
-
-        return null;
+        return $name->toString();
     }
 
-    private static function namespaceOf(Name $namespaced): string
+    private static function hasNamespaceFallback(Name $name): bool
     {
-        $parts = $namespaced->getParts();
-        array_pop($parts);
+        if (!$name->isUnqualified()) {
+            return false;
+        }
 
-        return implode('\\', $parts);
+        $namespaced = $name->getAttribute('namespacedName');
+
+        return $namespaced instanceof Name
+            && $namespaced->toString() !== $name->toString();
+    }
+
+    private function failure(string $reason, Node $node): ExportException
+    {
+        return ExportException::nonPortableClosure(
+            $reason,
+            $this->filename,
+            $node->getStartLine() ?: $this->line,
+        );
+    }
+
+    private static function canonicalPath(string $path): string
+    {
+        return realpath($path) ?: $path;
     }
 }

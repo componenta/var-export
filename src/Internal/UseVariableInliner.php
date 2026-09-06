@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Internal;
 
-use Componenta\VarExport\Exception\ClosureExportException;
+use Componenta\VarExport\Exception\ExportException;
+use Componenta\VarExport\VarExport;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Assign;
@@ -25,16 +26,16 @@ final readonly class UseVariableInliner
 {
     /**
      * @param array<string, mixed> $variables
-     * @throws ClosureExportException
+     * @throws ExportException
      */
     public function inline(
         Closure|ArrowFunction $closure,
         array $variables,
         int $maxDepth,
+        VarExport $varExport,
         int $captureDepth = 1,
         ?string $filename = null,
         ?int $line = null,
-        bool $sortKeys = false,
     ): Node\Expr {
         if ($variables === []) {
             return $closure;
@@ -48,10 +49,10 @@ final readonly class UseVariableInliner
                     $value,
                     $name,
                     $maxDepth,
+                    $varExport,
                     depth: $captureDepth,
                     filename: $filename,
                     line: $line,
-                    sortKeys: $sortKeys,
                 ),
             ));
         }

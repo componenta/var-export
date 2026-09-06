@@ -15,7 +15,7 @@ final class WarningGuard
     public static function run(callable $operation): mixed
     {
         set_error_handler(
-            static fn(int $_severity, string $_message, string $_file, int $_line): bool => true,
+            static fn (int $_severity, string $_message, string $_file, int $_line): bool => true,
             E_WARNING,
         );
 
@@ -25,6 +25,4 @@ final class WarningGuard
             restore_error_handler();
         }
     }
-
-    private function __construct() {}
 }

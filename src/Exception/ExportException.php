@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Exception;
 
-use Componenta\VarExport\Contract\ExceptionInterface;
 use Exception;
 use Throwable;
 
@@ -23,43 +22,95 @@ class ExportException extends Exception implements ExceptionInterface
         if ($sourceFile !== null) {
             $this->file = $sourceFile;
         }
+
         if ($sourceLine !== null) {
             $this->line = $sourceLine;
         }
     }
 
-    public static function unsupportedType(mixed $value): self
+    public static function exporterIsNotBound(string $exporter): self
     {
-        $type = get_debug_type($value);
-        return new self(sprintf('Cannot export value of type "%s".', $type), ['type' => $type]);
+        return new self(
+            sprintf('%s must be bound with withVarExport() before exporting a supported value.', $exporter),
+            ['exporter' => $exporter],
+        );
     }
 
-    public static function unexportableObject(object $object): self
+    /** @param list<int|string> $path */
+    public static function arrayReference(array $path): self
     {
-        return new self(sprintf('Object of type "%s" is not reconstructable by the configured object exporters.', $object::class), ['class' => $object::class]);
+        return new self(
+            sprintf('Cannot export array reference at %s.', self::formatPath('$array', $path)),
+            ['path' => $path],
+        );
     }
 
-    public static function resourceNotExportable(mixed $resource): self
-    {
-        $type = is_resource($resource) ? get_resource_type($resource) : (is_object($resource) ? $resource::class : 'closed resource');
-        return new self(sprintf('Resource of type "%s" cannot be represented as executable PHP source.', $type), ['resource_type' => $type]);
+    public static function nonPortableClosure(
+        string $reason,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        return new self(
+            sprintf('Closure is not portable as a standalone PHP expression: %s.', $reason),
+            ['reason' => $reason],
+            $filename,
+            $line,
+        );
     }
 
-    public static function objectCycle(string $class, int $depth): self
-    {
-        return new self(sprintf('Cyclic object graph detected while exporting "%s" at depth %d.', $class, $depth), ['class' => $class, 'depth' => $depth]);
+    /** @param list<int|string> $path */
+    public static function captureValueNotExportable(
+        string $variable,
+        string $type,
+        array $path,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        return new self(
+            sprintf(
+                'Cannot freeze captured variable $%s at %s: unsupported %s.',
+                $variable,
+                self::formatPath('$capture', $path),
+                $type,
+            ),
+            ['variable' => $variable, 'type' => $type, 'path' => $path],
+            $filename,
+            $line,
+        );
     }
 
-    /** @param array<int|string> $keyPath */
-    public static function formatKeyPath(array $keyPath): string
+    /** @param list<int|string> $path */
+    public static function captureDepthExceeded(
+        string $variable,
+        int $maxDepth,
+        int $depth,
+        array $path,
+        ?string $filename = null,
+        ?int $line = null,
+    ): self {
+        return new self(
+            sprintf(
+                'Captured variable $%s exceeds maximum depth %d at depth %d (%s).',
+                $variable,
+                $maxDepth,
+                $depth,
+                self::formatPath('$capture', $path),
+            ),
+            ['variable' => $variable, 'max_depth' => $maxDepth, 'depth' => $depth, 'path' => $path],
+            $filename,
+            $line,
+        );
+    }
+
+    /** @param list<int|string> $path */
+    private static function formatPath(string $root, array $path): string
     {
-        if ($keyPath === []) {
-            return 'root';
+        foreach ($path as $segment) {
+            $root .= is_int($segment)
+                ? sprintf('[%d]', $segment)
+                : sprintf('[%s]', var_export($segment, true));
         }
-        $parts = [];
-        foreach ($keyPath as $key) {
-            $parts[] = is_int($key) ? sprintf('[%d]', $key) : sprintf('[%s]', var_export($key, true));
-        }
-        return '$array' . implode('', $parts);
+
+        return $root;
     }
 }

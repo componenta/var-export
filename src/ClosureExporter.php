@@ -5,39 +5,54 @@ declare(strict_types=1);
 namespace Componenta\VarExport;
 
 use Closure;
-use Componenta\VarExport\Config\ClosureUseMode;
-use Componenta\VarExport\Config\ExportConfig;
-use Componenta\VarExport\Exception\ClosureExportException;
+use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Internal\ClosurePortabilityAnalyzer;
-use Componenta\VarExport\Internal\ClosureValidator;
-use Componenta\VarExport\Internal\ExportContext;
-use Componenta\VarExport\Internal\MagicConstantResolver;
-use Componenta\VarExport\Internal\SourceSymbolResolver;
 use Componenta\VarExport\Internal\UseVariableInliner;
-use Componenta\VarExport\Source\ClosureSourceCache;
-use Componenta\VarExport\Source\ClosureSourceCandidate;
-use PhpParser\ConstExprEvaluationException;
-use PhpParser\ConstExprEvaluator;
+use Componenta\VarExport\Internal\WarningGuard;
 use PhpParser\Node;
 use PhpParser\Node\ClosureUse;
+use PhpParser\Node\ComplexType;
 use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\Array_;
+use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\AssignRef;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
 use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\List_;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\UnaryMinus;
+use PhpParser\Node\Expr\UnaryPlus;
 use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Expr\Yield_;
+use PhpParser\Node\Expr\YieldFrom;
 use PhpParser\Node\Identifier;
-use PhpParser\Node\IntersectionType as NodeIntersectionType;
+use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\PropertyHook;
+use PhpParser\Node\Scalar\Float_;
+use PhpParser\Node\Scalar\Int_;
+use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Declare_;
+use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\Property;
 use PhpParser\Node\Stmt\Return_;
-use PhpParser\Node\UnionType as NodeUnionType;
+use PhpParser\Node\Stmt\Static_;
+use PhpParser\Node\UnionType;
+use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\NodeVisitor\ParentConnectingVisitor;
+use PhpParser\ParserFactory;
 use PhpParser\PhpVersion;
 use PhpParser\PrettyPrinter\Standard as PrettyPrinter;
 use ReflectionFunction;
+use ReflectionAttribute;
 use ReflectionIntersectionType;
 use ReflectionNamedType;
 use ReflectionParameter;
@@ -46,245 +61,413 @@ use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
 
-final readonly class ClosureExporter
+final class ClosureExporter implements VarExportInterface, VarExportAwareInterface
 {
-    private ClosureValidator $validator;
-    private UseVariableInliner $inliner;
-    private PrettyPrinter $printer;
-    private ClosureSourceCache $sourceCache;
+    private const int MAX_CAPTURE_DEPTH = 64;
 
-    public function __construct(
-        private ExportConfig $config = new ExportConfig(),
-        ?ClosureSourceCache $sourceCache = null,
-    ) {
-        $this->validator = new ClosureValidator();
+    private ?VarExport $varExport = null;
+    private readonly UseVariableInliner $inliner;
+    private readonly PrettyPrinter $printer;
+
+    public function __construct()
+    {
         $this->inliner = new UseVariableInliner();
-        $this->sourceCache = $sourceCache ?? new ClosureSourceCache();
         $this->printer = new PrettyPrinter([
-            'indent' => $this->config->indent,
+            'indent' => '    ',
             'phpVersion' => PhpVersion::getHostVersion(),
         ]);
     }
 
-    public function export(Closure $closure, ?ExportContext $context = null): string
+    public function withVarExport(VarExport $varExport): static
     {
-        $context ??= ExportContext::root();
+        $exporter = clone $this;
+        $exporter->varExport = $varExport;
 
-        if ($context->depth > $this->config->maxDepth) {
-            throw ClosureExportException::nestingDepthExceeded(
-                $this->config->maxDepth,
-                $context->depth,
+        return $exporter;
+    }
+
+    public function export(mixed $var): ?string
+    {
+        if (!$var instanceof Closure) {
+            return null;
+        }
+
+        $varExport = $this->varExport;
+        if ($varExport === null) {
+            throw ExportException::exporterIsNotBound(self::class);
+        }
+
+        $reflection = new ReflectionFunction($var);
+        $this->validateReflection($reflection);
+        [$node, $sourceUsesStrictTypes] = $this->findNode($reflection);
+
+        new NodeTraverser(new ClosurePortabilityAnalyzer(
+            $reflection->getFileName() ?: 'unknown',
+            $reflection->getStartLine() ?: 1,
+        ))->traverse([$node]);
+        $this->assertNoByReferenceCaptures($node, $reflection);
+
+        $node = $this->inliner->inline(
+            $node,
+            self::usedVariables($reflection),
+            self::MAX_CAPTURE_DEPTH,
+            $varExport,
+            filename: $reflection->getFileName() ?: null,
+            line: $reflection->getStartLine() ?: null,
+        );
+        $node = $this->isolateUnboundClosure($node, $reflection);
+        $node = $this->restoreRuntimeScope($node, $reflection);
+        $node = $this->guardStrictTypes($node, $sourceUsesStrictTypes);
+
+        return $this->printer->prettyPrintExpr($node);
+    }
+
+    private function validateReflection(ReflectionFunction $reflection): void
+    {
+        $name = $reflection->getName();
+        if ($name !== '{closure}' && !str_starts_with($name, '{closure:')) {
+            throw new ExportException(
+                sprintf('Closure created from named callable "%s" cannot be exported.', $name),
+                ['callable' => $name],
             );
         }
 
-        $reflection = $this->validator->validate($closure);
-        $this->assertNoStaticLocalState($reflection);
+        $filename = $reflection->getFileName();
+        if ($filename === false || !is_file($filename) || !is_readable($filename)) {
+            throw new ExportException(
+                sprintf('Cannot read closure source file "%s".', $filename ?: 'unknown'),
+                ['filename' => $filename ?: null],
+            );
+        }
 
-        try {
-            $candidate = $this->selectCandidate($reflection);
-            $node = $candidate->node;
-            $sourceNode = $node;
+        if ($reflection->getClosureThis() !== null) {
+            throw new ExportException(
+                'Closure bound to $this cannot be exported safely.',
+                ['closure' => $name],
+                $filename,
+                $reflection->getStartLine() ?: null,
+            );
+        }
 
-            $this->assertPortableExpression($node, $reflection);
-            $this->resolveMagicConstants($node, $candidate, $reflection);
-            $this->resolveSourceSymbols($node);
+        $staticLocals = array_diff_key(
+            $reflection->getStaticVariables(),
+            $reflection->getClosureUsedVariables(),
+        );
+        if ($staticLocals !== []) {
+            throw new ExportException(
+                sprintf(
+                    'Closure static local variables cannot be exported: %s.',
+                    implode(', ', array_map(
+                        static fn (string $variable): string => '$' . $variable,
+                        array_keys($staticLocals),
+                    )),
+                ),
+                ['variables' => array_keys($staticLocals)],
+                $filename,
+                $reflection->getStartLine() ?: null,
+            );
+        }
 
-            if ($this->config->closureUseMode === ClosureUseMode::Inline) {
-                $this->assertNoByReferenceCapture($node, $reflection);
-                $node = $this->inliner->inline(
-                    $node,
-                    self::closureUsedVariables($reflection),
-                    $this->config->maxDepth,
-                    captureDepth: $context->depth + 1,
-                    filename: $reflection->getFileName() ?: null,
-                    line: $reflection->getStartLine() ?: null,
-                    sortKeys: $this->config->sortKeys,
-                );
-            }
+        $scope = $reflection->getClosureScopeClass();
+        if ($scope === null) {
+            return;
+        }
 
-            $node = $this->isolateUnboundClosure($node, $sourceNode, $reflection);
-            $node = $this->restoreRuntimeScope($node, $reflection);
-            $code = $this->printer->prettyPrintExpr($node);
-
-            return $this->config->isPretty()
-                ? $this->formatPretty($code, $context->baseIndent)
-                : $this->formatCompact($code);
-        } catch (ClosureExportException $e) {
-            throw $e;
-        } catch (Throwable $e) {
-            throw ClosureExportException::internalFailure($reflection, $e);
+        $called = $reflection->getClosureCalledClass() ?? $scope;
+        if ($scope->isAnonymous() || $called->getName() !== $scope->getName()) {
+            throw new ExportException(
+                'Closure class scope cannot be reproduced safely.',
+                ['scope' => $scope->getName(), 'called_class' => $called->getName()],
+                $filename,
+                $reflection->getStartLine() ?: null,
+            );
         }
     }
 
-    private function assertPortableExpression(
-        ClosureNode|ArrowFunction $node,
-        ReflectionFunction $reflection,
-    ): void {
-        $analyzer = new ClosurePortabilityAnalyzer(
-            $this->config->closureExportPolicy,
-            $this->config->sourcePathPolicy,
-            $reflection->getFileName() ?: null,
-            $reflection->getStartLine() ?: null,
-            $reflection->getName(),
-        );
-
-        (new NodeTraverser($analyzer))->traverse([$node]);
-    }
-
-    private function selectCandidate(ReflectionFunction $reflection): ClosureSourceCandidate
+    /** @return array{ClosureNode|ArrowFunction, bool} */
+    private function findNode(ReflectionFunction $reflection): array
     {
         $filename = $reflection->getFileName();
         $startLine = $reflection->getStartLine();
+        $endLine = $reflection->getEndLine();
 
-        if ($filename === false || $startLine === false) {
-            throw ClosureExportException::sourceNotFound($filename ?: 'unknown');
+        if ($filename === false || $startLine === false || $endLine === false) {
+            throw new ExportException('Closure source location is unavailable.');
         }
 
-        $candidates = $this->sourceCache->candidates($filename, $startLine);
+        $source = WarningGuard::run(static fn (): string|false => file_get_contents($filename));
+        if ($source === false) {
+            throw new ExportException(
+                sprintf('Cannot read closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $startLine,
+            );
+        }
+
+        try {
+            $statements = (new ParserFactory())
+                ->createForHostVersion()
+                ->parse($source);
+        } catch (Throwable $error) {
+            throw new ExportException(
+                sprintf('Cannot parse closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $startLine,
+                $error,
+            );
+        }
+
+        if ($statements === null) {
+            throw new ExportException(
+                sprintf('Cannot parse closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $startLine,
+            );
+        }
+
+        $statements = (new NodeTraverser(new NameResolver()))->traverse($statements);
+        $statements = (new NodeTraverser(new ParentConnectingVisitor()))->traverse($statements);
+        $nodes = (new NodeFinder())->find(
+            $statements,
+            fn (Node $node): bool => ($node instanceof ClosureNode || $node instanceof ArrowFunction)
+                && $node->getStartLine() <= $reflection->getStartLine()
+                && $node->getEndLine() === $reflection->getEndLine(),
+        );
+        $candidates = [];
+        foreach ($nodes as $candidate) {
+            if ($candidate instanceof ClosureNode || $candidate instanceof ArrowFunction) {
+                $candidates[] = $candidate;
+            }
+        }
+
         if ($candidates === []) {
-            throw ClosureExportException::nodeNotFound($startLine, $filename);
+            throw new ExportException(
+                sprintf(
+                    'Expected one closure expression at %s:%d, found %d.',
+                    $filename,
+                    $startLine,
+                    count($candidates),
+                ),
+                ['filename' => $filename, 'line' => $startLine, 'candidates' => count($candidates)],
+                $filename,
+                $startLine,
+            );
         }
 
         $matches = [];
         $deferredError = null;
-
         foreach ($candidates as $candidate) {
-            $candidateError = null;
-            if ($this->matchesReflection($candidate, $reflection, $candidateError)) {
-                $matches[] = $candidate;
-                continue;
+            try {
+                if ($this->matchesReflection($candidate, $reflection)) {
+                    $matches[] = $candidate;
+                }
+            } catch (ExportException $error) {
+                $deferredError ??= $error;
             }
+        }
 
-            $deferredError ??= $candidateError;
+        if ($matches === [] && $deferredError !== null) {
+            throw $deferredError;
         }
 
         if ($matches === []) {
-            if ($deferredError !== null) {
-                throw $deferredError;
-            }
-
-            throw ClosureExportException::staleSource($reflection);
+            throw new ExportException(
+                'Closure source no longer matches the runtime closure metadata.',
+                ['filename' => $filename, 'line' => $startLine],
+                $filename,
+                $startLine,
+            );
         }
 
         if (count($matches) !== 1) {
-            throw ClosureExportException::ambiguousLocation($startLine, count($matches), $filename);
+            throw new ExportException(
+                sprintf(
+                    'Expected one closure expression at %s:%d, found %d.',
+                    $filename,
+                    $startLine,
+                    count($matches),
+                ),
+                ['filename' => $filename, 'line' => $startLine, 'candidates' => count($matches)],
+                $filename,
+                $startLine,
+            );
         }
 
-        return $matches[0];
+        return [
+            $matches[0],
+            self::sourceUsesStrictTypes($statements, $matches[0], $reflection),
+        ];
     }
 
-    private function matchesReflection(
-        ClosureSourceCandidate $candidate,
+    /** @param array<array-key, Node> $statements */
+    private static function sourceUsesStrictTypes(
+        array $statements,
+        ClosureNode|ArrowFunction $closure,
         ReflectionFunction $reflection,
-        ?ClosureExportException &$deferredError = null,
     ): bool {
-        if (!$this->sourceOwnerMatches($candidate, $reflection)) {
-            return false;
-        }
+        $strictTypes = false;
+        $declarations = (new NodeFinder())->findInstanceOf($statements, Declare_::class);
 
-        $node = $candidate->node;
-        if ($node->getEndLine() !== $reflection->getEndLine()) {
-            return false;
-        }
+        foreach ($declarations as $declaration) {
+            foreach ($declaration->declares as $declare) {
+                $name = strtolower($declare->key->toString());
+                if ($name === 'strict_types') {
+                    $strictTypes = $declare->value instanceof Int_
+                        && $declare->value->value === 1;
 
-        if ((bool) $node->static !== $reflection->isStatic()) {
-            return false;
-        }
-
-        if ((bool) $node->byRef !== $reflection->returnsReference()) {
-            return false;
-        }
-
-        if ($this->nodeIsGenerator($node) !== $reflection->isGenerator()) {
-            return false;
-        }
-
-        if ($this->ownScopeContains($node, Node\Stmt\Static_::class)) {
-            return false;
-        }
-
-        if (!$this->attributesMatch($node->attrGroups, $reflection->getAttributes(), $reflection, $deferredError)) {
-            return false;
-        }
-
-        $parameters = $reflection->getParameters();
-        if (count($node->params) !== count($parameters)) {
-            return false;
-        }
-
-        /** @var list<array{Node\Expr, ReflectionParameter}> $defaults */
-        $defaults = [];
-
-        foreach ($parameters as $index => $parameter) {
-            $nodeParameter = $node->params[$index];
-            if (
-                !$nodeParameter->var instanceof Variable
-                || !is_string($nodeParameter->var->name)
-                || $nodeParameter->var->name !== $parameter->getName()
-            ) {
-                return false;
-            }
-
-            if ($nodeParameter->byRef !== $parameter->isPassedByReference()) {
-                return false;
-            }
-
-            if ($nodeParameter->variadic !== $parameter->isVariadic()) {
-                return false;
-            }
-
-            if (!$this->attributesMatch($nodeParameter->attrGroups, $parameter->getAttributes(), $reflection, $deferredError)) {
-                return false;
-            }
-
-            if (!$this->typesMatch($nodeParameter->type, $parameter->getType())) {
-                return false;
-            }
-
-            if (($nodeParameter->default !== null) !== $parameter->isDefaultValueAvailable()) {
-                return false;
-            }
-
-            if ($nodeParameter->default !== null) {
-                $defaults[] = [$nodeParameter->default, $parameter];
-            }
-        }
-
-        if (!$this->typesMatch($node->returnType, $reflection->getReturnType())) {
-            return false;
-        }
-
-        if ($node instanceof ClosureNode) {
-            $usedVariables = self::closureUsedVariables($reflection);
-            $useNames = [];
-            foreach ($node->uses as $use) {
-                if (!is_string($use->var->name)) {
                     continue;
                 }
 
-                $name = $use->var->name;
-                $useNames[] = $name;
-                $isReference = ReflectionReference::fromArrayElement($usedVariables, $name) !== null;
-                if ($use->byRef !== $isReference) {
-                    return false;
+                if (
+                    self::nodeHasAncestor($declaration, $closure)
+                    || !self::declarationAffectsNode($declaration, $closure)
+                ) {
+                    continue;
                 }
-            }
 
-            if ($useNames !== array_keys($usedVariables)) {
-                return false;
+                throw ExportException::nonPortableClosure(
+                    sprintf('declare(%s) cannot be preserved outside the closure expression', $name),
+                    $reflection->getFileName() ?: null,
+                    $declaration->getStartLine() ?: $reflection->getStartLine() ?: null,
+                );
             }
-        } elseif ($this->arrowUsedVariableNames($node) !== array_keys(self::closureUsedVariables($reflection))) {
+        }
+
+        return $strictTypes;
+    }
+
+    private static function declarationAffectsNode(Declare_ $declaration, Node $node): bool
+    {
+        if ($declaration->stmts !== null) {
+            return self::nodeHasAncestor($node, $declaration);
+        }
+
+        $parent = $declaration->getAttribute('parent');
+        if ($parent instanceof Node && !self::nodeHasAncestor($node, $parent)) {
             return false;
         }
 
-        foreach ($defaults as [$nodeDefault, $parameter]) {
-            try {
-                if (!$this->defaultMatches($nodeDefault, $parameter)) {
-                    return false;
-                }
-            } catch (ClosureExportException $e) {
-                $deferredError = $e;
+        $declarationPosition = $declaration->getStartFilePos();
+        $nodePosition = $node->getStartFilePos();
 
+        return $declarationPosition < 0
+            || $nodePosition < 0
+            || $declarationPosition <= $nodePosition;
+    }
+
+    private static function nodeHasAncestor(Node $node, Node $ancestor): bool
+    {
+        $current = $node;
+
+        while (true) {
+            if ($current === $ancestor) {
+                return true;
+            }
+
+            $parent = $current->getAttribute('parent');
+            if (!$parent instanceof Node) {
+                return false;
+            }
+
+            $current = $parent;
+        }
+    }
+
+    private function guardStrictTypes(Node\Expr $node, bool $sourceUsesStrictTypes): Node\Expr
+    {
+        $sourceMode = $sourceUsesStrictTypes ? 'true' : 'false';
+        $statements = (new ParserFactory())
+            ->createForHostVersion()
+            ->parse(sprintf(<<<'PHP'
+<?php
+return (static function () {
+    $componentaVarExportStrictTypes = false;
+
+    try {
+        (static fn (int $value): int => $value)('1');
+    } catch (\TypeError) {
+        $componentaVarExportStrictTypes = true;
+    }
+
+    if ($componentaVarExportStrictTypes !== %s) {
+        throw new \Componenta\VarExport\Exception\ExportException(
+            'Closure strict_types mode does not match the generated PHP file.',
+            [
+                'source_strict_types' => %s,
+                'target_strict_types' => $componentaVarExportStrictTypes,
+            ],
+        );
+    }
+
+    return null;
+})();
+PHP, $sourceMode, $sourceMode));
+        $return = $statements[0] ?? null;
+
+        if (
+            !$return instanceof Return_
+            || !$return->expr instanceof FuncCall
+            || !$return->expr->name instanceof ClosureNode
+        ) {
+            throw new \LogicException('Unable to build the closure strict_types guard.');
+        }
+
+        $factory = $return->expr->name;
+        $lastIndex = count($factory->stmts) - 1;
+        $lastReturn = $factory->stmts[$lastIndex] ?? null;
+        if (!$lastReturn instanceof Return_) {
+            throw new \LogicException('Unable to build the closure strict_types guard.');
+        }
+
+        $lastReturn->expr = $node;
+
+        return $return->expr;
+    }
+
+    /** @return array<string, mixed> */
+    private static function usedVariables(ReflectionFunction $reflection): array
+    {
+        $variables = [];
+        foreach ($reflection->getClosureUsedVariables() as $name => $value) {
+            if (!is_string($name)) {
+                throw new \LogicException('Closure capture names must be strings.');
+            }
+
+            $variables[$name] = $value;
+        }
+
+        return $variables;
+    }
+
+    private function matchesSignature(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+    ): bool {
+        if (
+            (bool) $node->static !== $reflection->isStatic()
+            || (bool) $node->byRef !== $reflection->returnsReference()
+            || count($node->params) !== $reflection->getNumberOfParameters()
+            || $this->nodeType($node->returnType, $reflection)
+                !== $this->reflectionType($reflection->getReturnType(), $reflection)
+        ) {
+            return false;
+        }
+
+        foreach ($reflection->getParameters() as $index => $parameter) {
+            $variable = $node->params[$index]->var;
+            if (
+                !$variable instanceof Variable
+                || !is_string($variable->name)
+                || $variable->name !== $parameter->getName()
+                || $node->params[$index]->byRef !== $parameter->isPassedByReference()
+                || $node->params[$index]->variadic !== $parameter->isVariadic()
+                || $this->nodeType($node->params[$index]->type, $reflection)
+                    !== $this->reflectionType($parameter->getType(), $reflection)
+                || !$this->defaultMatches($node->params[$index]->default, $parameter, $reflection)
+            ) {
                 return false;
             }
         }
@@ -292,62 +475,216 @@ final readonly class ClosureExporter
         return true;
     }
 
-    private function sourceOwnerMatches(ClosureSourceCandidate $candidate, ReflectionFunction $reflection): bool
+    private function matchesReflection(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+    ): bool {
+        if (
+            !$this->sourceOwnerMatches($node, $reflection)
+            || !$this->matchesSignature($node, $reflection)
+            || $this->nodeIsGenerator($node) !== $reflection->isGenerator()
+            || $this->ownScopeContains($node, Static_::class)
+            || !$this->attributesMatch($node->attrGroups, $reflection->getAttributes(), $reflection)
+            || !$this->captureMetadataMatches($node, $reflection)
+        ) {
+            return false;
+        }
+
+        foreach ($reflection->getParameters() as $index => $parameter) {
+            if (!$this->attributesMatch(
+                $node->params[$index]->attrGroups,
+                $parameter->getAttributes(),
+                $reflection,
+            )) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function sourceOwnerMatches(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+    ): bool {
+        [$runtimeDepth, $runtimeName] = self::closureNameParts($reflection->getName());
+        if ($this->closureDepth($node) !== $runtimeDepth) {
+            return false;
+        }
+
+        $parent = $node->getAttribute('parent');
+        while ($parent instanceof Node) {
+            if ($parent instanceof Function_) {
+                $function = $parent->namespacedName?->toString() ?? $parent->name->toString();
+
+                return str_starts_with($runtimeName, $function . '():');
+            }
+
+            if ($parent instanceof ClassMethod || $parent instanceof PropertyHook) {
+                if ($parent instanceof ClassMethod) {
+                    $method = $parent->name->toString();
+                } else {
+                    $property = $parent->getAttribute('parent');
+                    if (!$property instanceof Property) {
+                        return false;
+                    }
+
+                    $method = '$' . $property->props[0]->name->toString()
+                        . '::' . $parent->name->toString();
+                }
+                $class = $parent->getAttribute('parent');
+                while ($class instanceof Node && !$class instanceof ClassLike) {
+                    $class = $class->getAttribute('parent');
+                }
+
+                if (!$class instanceof ClassLike || $class->name === null) {
+                    return false;
+                }
+
+                $owner = $class->namespacedName?->toString() ?? $class->name->toString();
+
+                return str_starts_with($runtimeName, $owner . '::' . $method . '():');
+            }
+
+            $parent = $parent->getAttribute('parent');
+        }
+
+        $filename = $reflection->getFileName();
+
+        return $filename !== false && str_starts_with($runtimeName, $filename . ':');
+    }
+
+    private function closureDepth(ClosureNode|ArrowFunction $node): int
     {
-        [$closureDepth, $name] = self::closureNameParts($reflection->getName());
-        if ($candidate->closureDepth !== $closureDepth) {
-            return false;
-        }
+        $depth = 0;
+        $current = $node;
 
-        if ($candidate->function !== '') {
-            return str_starts_with($name, $candidate->function . '():');
-        }
-
-        if ($candidate->trait !== '') {
-            if ($candidate->method !== '') {
-                return str_starts_with($name, $candidate->trait . '::' . $candidate->method . '():');
+        while (true) {
+            if ($current instanceof ClosureNode || $current instanceof ArrowFunction) {
+                ++$depth;
             }
 
-            return str_starts_with($name, $candidate->trait . '::');
-        }
-
-        if ($candidate->method !== '') {
-            if ($candidate->class !== '') {
-                return str_starts_with($name, $candidate->class . '::' . $candidate->method . '():');
+            $parent = $current->getAttribute('parent');
+            if (!$parent instanceof Node || $parent instanceof Function_ || $parent instanceof ClassMethod) {
+                return $depth;
             }
 
-            return false;
+            $current = $parent;
         }
-
-        if ($candidate->class !== '') {
-            return str_starts_with($name, $candidate->class . '::');
-        }
-
-        return str_starts_with($name, $reflection->getFileName() . ':');
     }
 
     /** @return array{int, string} */
     private static function closureNameParts(string $name): array
     {
         $depth = 0;
-        $prefix = '{closure:';
-        while (str_starts_with($name, $prefix)) {
+        while (str_starts_with($name, '{closure:')) {
             ++$depth;
-            $name = substr($name, strlen($prefix));
+            $name = substr($name, strlen('{closure:'));
         }
 
         return [$depth, $name];
     }
 
+    private function nodeType(
+        null|Identifier|Name|ComplexType $type,
+        ReflectionFunction $reflection,
+    ): ?string {
+        if ($type === null) {
+            return null;
+        }
+
+        if ($type instanceof NullableType) {
+            return $this->typeSet('union', [
+                'null',
+                $this->nodeType($type->type, $reflection) ?? '',
+            ]);
+        }
+
+        if ($type instanceof UnionType || $type instanceof IntersectionType) {
+            return $this->typeSet(
+                $type instanceof UnionType ? 'union' : 'intersection',
+                array_values(array_map(
+                    fn (Identifier|Name|IntersectionType $member): string => $this->nodeType($member, $reflection) ?? '',
+                    $type->types,
+                )),
+            );
+        }
+
+        if ($type instanceof Identifier) {
+            return strtolower($type->name);
+        }
+
+        if (!$type instanceof Name) {
+            throw new \LogicException(sprintf('Unsupported parser type node %s.', $type::class));
+        }
+
+        $name = $type->toString();
+        if (strtolower($name) === 'self') {
+            return $reflection->getClosureScopeClass()?->getName() ?? 'self';
+        }
+
+        if (strtolower($name) === 'parent') {
+            $parent = $reflection->getClosureScopeClass()?->getParentClass();
+
+            return $parent === null || $parent === false ? 'parent' : $parent->getName();
+        }
+
+        return ltrim($name, '\\');
+    }
+
+    private function reflectionType(?ReflectionType $type, ReflectionFunction $reflection): ?string
+    {
+        if ($type === null) {
+            return null;
+        }
+
+        if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+            return $this->typeSet(
+                $type instanceof ReflectionUnionType ? 'union' : 'intersection',
+                array_values(array_map(
+                    fn (ReflectionType $member): string => $this->reflectionType($member, $reflection) ?? '',
+                    $type->getTypes(),
+                )),
+            );
+        }
+
+        if (!$type instanceof ReflectionNamedType) {
+            return (string) $type;
+        }
+
+        $name = $type->isBuiltin()
+            ? strtolower($type->getName())
+            : ltrim($type->getName(), '\\');
+        if ($name === 'self') {
+            $name = $reflection->getClosureScopeClass()?->getName() ?? 'self';
+        } elseif ($name === 'parent') {
+            $parent = $reflection->getClosureScopeClass()?->getParentClass();
+            $name = $parent === null || $parent === false ? 'parent' : $parent->getName();
+        }
+
+        if ($type->allowsNull() && !in_array($name, ['mixed', 'null'], true)) {
+            return $this->typeSet('union', ['null', $name]);
+        }
+
+        return $name;
+    }
+
+    /** @param list<string> $members */
+    private function typeSet(string $kind, array $members): string
+    {
+        sort($members);
+
+        return sprintf('%s(%s)', $kind, implode(',', $members));
+    }
+
     /**
      * @param array<array-key, Node\AttributeGroup> $nodeGroups
-     * @param list<\ReflectionAttribute<object>> $reflectionAttributes
+     * @param list<ReflectionAttribute<object>> $reflectionAttributes
      */
     private function attributesMatch(
         array $nodeGroups,
         array $reflectionAttributes,
         ReflectionFunction $reflection,
-        ?ClosureExportException &$deferredError,
     ): bool {
         $nodeAttributes = [];
         foreach ($nodeGroups as $group) {
@@ -369,8 +706,8 @@ final readonly class ClosureExporter
                 return false;
             }
 
-            $reflectionArgumentSyntax = self::reflectionAttributeArgumentSyntax($reflectionAttribute);
-            if (count($nodeAttribute->args) !== count($reflectionArgumentSyntax)) {
+            $runtimeSyntax = self::reflectionAttributeArgumentSyntax($reflectionAttribute);
+            if (count($nodeAttribute->args) !== count($runtimeSyntax)) {
                 return false;
             }
 
@@ -378,29 +715,35 @@ final readonly class ClosureExporter
                 continue;
             }
 
-            if (self::reflectionArgumentsMayExecute($reflectionArgumentSyntax)) {
-                $deferredError = self::unverifiableAttributeArguments($reflectionAttribute->getName(), $reflection);
-
-                return false;
-            }
-
-            $nodeArguments = [];
-            try {
-                foreach ($nodeAttribute->args as $argumentIndex => $argument) {
-                    $key = $argument->name?->toString() ?? $argumentIndex;
-                    $nodeArguments[$key] = (new ConstExprEvaluator())->evaluateSilently($argument->value);
-                }
-            } catch (ConstExprEvaluationException $e) {
-                $deferredError = self::unverifiableAttributeArguments(
-                    $reflectionAttribute->getName(),
-                    $reflection,
-                    $e,
+            if (array_any($runtimeSyntax, self::reflectionExpressionMayExecute(...))) {
+                throw ExportException::nonPortableClosure(
+                    sprintf(
+                        'attribute arguments for "%s" cannot be verified without executing user code',
+                        $reflectionAttribute->getName(),
+                    ),
+                    $reflection->getFileName() ?: null,
+                    $reflection->getStartLine() ?: null,
                 );
-
-                return false;
             }
 
-            if (!self::sameValue($nodeArguments, $reflectionAttribute->getArguments())) {
+            $sourceArguments = [];
+            foreach ($nodeAttribute->args as $argumentIndex => $argument) {
+                $source = $this->sourceDefaultValue($argument->value);
+                if (!$source['verifiable']) {
+                    throw ExportException::nonPortableClosure(
+                        sprintf(
+                            'attribute arguments for "%s" cannot be verified safely',
+                            $reflectionAttribute->getName(),
+                        ),
+                        $reflection->getFileName() ?: null,
+                        $reflection->getStartLine() ?: null,
+                    );
+                }
+
+                $sourceArguments[$argument->name?->toString() ?? $argumentIndex] = $source['value'];
+            }
+
+            if (!self::sameValue($sourceArguments, $reflectionAttribute->getArguments())) {
                 return false;
             }
         }
@@ -408,50 +751,81 @@ final readonly class ClosureExporter
         return true;
     }
 
-    private static function unverifiableAttributeArguments(
-        string $attribute,
-        ReflectionFunction $reflection,
-        ?Throwable $previous = null,
-    ): ClosureExportException {
-        return new ClosureExportException(
-            sprintf(
-                'Cannot verify closure or parameter attribute arguments for "%s" without executing or autoloading user code.',
-                $attribute,
-            ),
-            ['attribute' => $attribute, 'closure' => $reflection->getName()],
-            $reflection->getFileName() ?: null,
-            $reflection->getStartLine() ?: null,
-            $previous,
-        );
-    }
-
     /**
-     * @param \ReflectionAttribute<object> $attribute
+     * @param ReflectionAttribute<object> $attribute
      * @return list<string>
      */
-    private static function reflectionAttributeArgumentSyntax(\ReflectionAttribute $attribute): array
+    private static function reflectionAttributeArgumentSyntax(ReflectionAttribute $attribute): array
     {
         $matches = [];
         if (preg_match_all('/^\s*Argument #\d+ \[ (.*) \]$/m', (string) $attribute, $matches) === false) {
             return [];
         }
 
-        /** @var list<string> $arguments */
-        $arguments = $matches[1];
-
-        return $arguments;
+        return $matches[1];
     }
 
-    /** @param list<string> $arguments */
-    private static function reflectionArgumentsMayExecute(array $arguments): bool
-    {
-        foreach ($arguments as $argument) {
-            if (self::reflectionExpressionMayExecute($argument)) {
-                return true;
-            }
+    private function defaultMatches(
+        ?Node\Expr $default,
+        ReflectionParameter $parameter,
+        ReflectionFunction $reflection,
+    ): bool {
+        if (($default !== null) !== $parameter->isDefaultValueAvailable()) {
+            return false;
         }
 
-        return false;
+        if ($default === null) {
+            return true;
+        }
+
+        if ($parameter->isDefaultValueConstant()) {
+            $runtimeName = $parameter->getDefaultValueConstantName();
+            $sourceName = $this->constantDefaultName($default, $reflection);
+
+            return is_string($runtimeName)
+                && $sourceName !== null
+                && ltrim($runtimeName, '\\') === ltrim($sourceName, '\\');
+        }
+
+        $sourceValue = $this->sourceDefaultValue($default);
+        $runtimeSyntax = self::reflectionParameterDefaultSyntax($parameter);
+        if (
+            !$sourceValue['verifiable']
+            || $runtimeSyntax === null
+            || self::reflectionExpressionMayExecute($runtimeSyntax)
+        ) {
+            throw ExportException::nonPortableClosure(
+                sprintf(
+                    'parameter default for $%s cannot be verified without executing user code',
+                    $parameter->getName(),
+                ),
+                $reflection->getFileName() ?: null,
+                $reflection->getStartLine() ?: null,
+            );
+        }
+
+        $runtimeValue = $parameter->getDefaultValue();
+        if (is_float($runtimeValue) && is_float($sourceValue['value'])) {
+            return is_nan($runtimeValue) && is_nan($sourceValue['value'])
+                || pack('d', $runtimeValue) === pack('d', $sourceValue['value']);
+        }
+
+        return $runtimeValue === $sourceValue['value'];
+    }
+
+    private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
+    {
+        $signature = (string) $parameter;
+        $marker = ' = ';
+        $start = strpos($signature, $marker);
+        $end = strrpos($signature, ' ]');
+        if ($start === false || $end === false) {
+            return null;
+        }
+
+        $start += strlen($marker);
+
+        return $end < $start ? null : substr($signature, $start, $end - $start);
     }
 
     private static function reflectionExpressionMayExecute(string $expression): bool
@@ -465,10 +839,172 @@ final readonly class ClosureExporter
         return false;
     }
 
+    private static function sameValue(mixed $left, mixed $right): bool
+    {
+        if (is_float($left) && is_float($right)) {
+            if (is_nan($left) || is_nan($right)) {
+                return is_nan($left) && is_nan($right);
+            }
+
+            return pack('d', $left) === pack('d', $right);
+        }
+
+        if (is_array($left) && is_array($right)) {
+            if (array_keys($left) !== array_keys($right)) {
+                return false;
+            }
+
+            foreach ($left as $key => $value) {
+                if (!self::sameValue($value, $right[$key])) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return $left === $right;
+    }
+
+    private function constantDefaultName(Node\Expr $default, ReflectionFunction $reflection): ?string
+    {
+        if ($default instanceof ConstFetch) {
+            $namespaced = $default->name->getAttribute('namespacedName');
+
+            return $namespaced instanceof Name
+                ? $namespaced->toString()
+                : $default->name->toString();
+        }
+
+        if (!$default instanceof ClassConstFetch || !$default->class instanceof Name || !$default->name instanceof Identifier) {
+            return null;
+        }
+
+        $class = $this->nodeType($default->class, $reflection);
+
+        return $class === null ? null : $class . '::' . $default->name->name;
+    }
+
+    /** @return array{verifiable: bool, value: mixed} */
+    private function sourceDefaultValue(Node\Expr $expression): array
+    {
+        if ($expression instanceof Int_ || $expression instanceof Float_ || $expression instanceof String_) {
+            return ['verifiable' => true, 'value' => $expression->value];
+        }
+
+        if ($expression instanceof ConstFetch) {
+            $value = match (strtolower($expression->name->toString())) {
+                'true' => true,
+                'false' => false,
+                'null' => null,
+                default => $expression,
+            };
+
+            return $value === $expression
+                ? ['verifiable' => false, 'value' => null]
+                : ['verifiable' => true, 'value' => $value];
+        }
+
+        if ($expression instanceof UnaryMinus || $expression instanceof UnaryPlus) {
+            $inner = $this->sourceDefaultValue($expression->expr);
+            if (!$inner['verifiable'] || !is_int($inner['value']) && !is_float($inner['value'])) {
+                return ['verifiable' => false, 'value' => null];
+            }
+
+            return [
+                'verifiable' => true,
+                'value' => $expression instanceof UnaryMinus ? -$inner['value'] : +$inner['value'],
+            ];
+        }
+
+        if (!$expression instanceof Array_) {
+            return ['verifiable' => false, 'value' => null];
+        }
+
+        $value = [];
+        foreach ($expression->items as $item) {
+            if ($item === null || $item->unpack || $item->byRef) {
+                return ['verifiable' => false, 'value' => null];
+            }
+
+            $itemValue = $this->sourceDefaultValue($item->value);
+            if (!$itemValue['verifiable']) {
+                return ['verifiable' => false, 'value' => null];
+            }
+
+            if ($item->key === null) {
+                $value[] = $itemValue['value'];
+
+                continue;
+            }
+
+            $key = $this->sourceDefaultValue($item->key);
+            if (!$key['verifiable'] || !is_int($key['value']) && !is_string($key['value'])) {
+                return ['verifiable' => false, 'value' => null];
+            }
+
+            $value[$key['value']] = $itemValue['value'];
+        }
+
+        return ['verifiable' => true, 'value' => $value];
+    }
+
+    private function assertNoByReferenceCaptures(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+    ): void {
+        $capture = (new NodeFinder())->findFirst(
+            $node,
+            static fn (Node $candidate): bool => $candidate instanceof ClosureUse && $candidate->byRef,
+        );
+        if ($capture !== null) {
+            throw ExportException::nonPortableClosure(
+                'captures by reference cannot be frozen',
+                $reflection->getFileName() ?: null,
+                $capture->getStartLine() ?: $reflection->getStartLine() ?: null,
+            );
+        }
+    }
+
+    private function captureMetadataMatches(
+        ClosureNode|ArrowFunction $node,
+        ReflectionFunction $reflection,
+    ): bool {
+        $usedVariables = $reflection->getClosureUsedVariables();
+        $runtimeNames = array_keys($usedVariables);
+        sort($runtimeNames);
+
+        if ($node instanceof ArrowFunction) {
+            return $this->arrowCaptureNames($node) === $runtimeNames;
+        }
+
+        $sourceNames = [];
+        foreach ($node->uses as $use) {
+            if (!is_string($use->var->name)) {
+                return false;
+            }
+
+            $name = $use->var->name;
+            if (!array_key_exists($name, $usedVariables)) {
+                return false;
+            }
+
+            if ($use->byRef !== (ReflectionReference::fromArrayElement($usedVariables, $name) !== null)) {
+                return false;
+            }
+
+            $sourceNames[] = $name;
+        }
+
+        sort($sourceNames);
+
+        return $sourceNames === $runtimeNames;
+    }
+
     private function nodeIsGenerator(ClosureNode|ArrowFunction $node): bool
     {
-        return $this->ownScopeContains($node, Node\Expr\Yield_::class)
-            || $this->ownScopeContains($node, Node\Expr\YieldFrom::class);
+        return $this->ownScopeContains($node, Yield_::class)
+            || $this->ownScopeContains($node, YieldFrom::class);
     }
 
     /** @param class-string<Node> $nodeClass */
@@ -505,7 +1041,7 @@ final readonly class ClosureExporter
             return true;
         }
 
-        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike) {
+        if ($node instanceof Node\FunctionLike || $node instanceof ClassLike) {
             return false;
         }
 
@@ -513,20 +1049,12 @@ final readonly class ClosureExporter
     }
 
     /** @return list<string> */
-    private function arrowUsedVariableNames(ArrowFunction $node): array
+    private function arrowCaptureNames(ArrowFunction $node): array
     {
-        /** @var array<string, true> $names */
         $names = [];
-        $this->collectArrowUsedVariableNames($node->expr, $names);
-
-        foreach ($node->params as $parameter) {
-            if ($parameter->var instanceof Variable && is_string($parameter->var->name)) {
-                unset($names[$parameter->var->name]);
-            }
-        }
+        $this->collectReadVariableNames($node->expr, $names);
 
         foreach ([
-            'this',
             'GLOBALS',
             '_SERVER',
             '_GET',
@@ -536,22 +1064,55 @@ final readonly class ClosureExporter
             '_SESSION',
             '_REQUEST',
             '_ENV',
-        ] as $name) {
-            unset($names[$name]);
+        ] as $automaticGlobal) {
+            unset($names[$automaticGlobal]);
         }
 
-        return array_keys($names);
+        foreach ($node->params as $parameter) {
+            if ($parameter->var instanceof Variable && is_string($parameter->var->name)) {
+                unset($names[$parameter->var->name]);
+            }
+        }
+
+        $names = array_keys($names);
+        sort($names);
+
+        return $names;
     }
 
-    /** @param array<string, true> $names */
-    private function collectArrowUsedVariableNames(Node $node, array &$names): void
+    /**
+     * @param Node|array<mixed>|null $node
+     * @param array<string, true> $names
+     */
+    private function collectReadVariableNames(Node|array|null $node, array &$names): void
     {
+        if ($node === null) {
+            return;
+        }
+
+        if (is_array($node)) {
+            foreach ($node as $child) {
+                if ($child instanceof Node) {
+                    $this->collectReadVariableNames($child, $names);
+                }
+            }
+
+            return;
+        }
+
         if ($node instanceof Variable) {
             if (is_string($node->name)) {
                 $names[$node->name] = true;
             } elseif ($node->name instanceof Node) {
-                $this->collectArrowUsedVariableNames($node->name, $names);
+                $this->collectReadVariableNames($node->name, $names);
             }
+
+            return;
+        }
+
+        if ($node instanceof Assign || $node instanceof AssignRef) {
+            $this->collectAssignmentTargetReads($node->var, $names);
+            $this->collectReadVariableNames($node->expr, $names);
 
             return;
         }
@@ -567,366 +1128,64 @@ final readonly class ClosureExporter
         }
 
         if ($node instanceof ArrowFunction) {
-            foreach ($this->arrowUsedVariableNames($node) as $name) {
+            foreach ($this->arrowCaptureNames($node) as $name) {
                 $names[$name] = true;
             }
 
             return;
         }
 
-        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike) {
-            return;
-        }
-
         foreach ($node->getSubNodeNames() as $subNodeName) {
-            $value = $node->{$subNodeName};
-            if ($value instanceof Node) {
-                $this->collectArrowUsedVariableNames($value, $names);
-                continue;
-            }
-
-            if (!is_array($value)) {
-                continue;
-            }
-
-            foreach ($value as $child) {
-                if ($child instanceof Node) {
-                    $this->collectArrowUsedVariableNames($child, $names);
-                }
+            $subNode = $node->{$subNodeName};
+            if ($subNode instanceof Node || is_array($subNode)) {
+                $this->collectReadVariableNames($subNode, $names);
             }
         }
     }
 
-    private function typesMatch(?Node $nodeType, ?ReflectionType $reflectionType): bool
+    /** @param array<string, true> $names */
+    private function collectAssignmentTargetReads(Node\Expr $target, array &$names): void
     {
-        return $this->nodeTypeDescriptor($nodeType) === $this->reflectionTypeDescriptor($reflectionType);
-    }
-
-    private function nodeTypeDescriptor(?Node $type): string
-    {
-        if ($type === null) {
-            return '';
-        }
-
-        if ($type instanceof NullableType) {
-            return self::compositeTypeDescriptor('union', [
-                $this->nodeTypeDescriptor($type->type),
-                'named:null',
-            ]);
-        }
-
-        if ($type instanceof NodeUnionType) {
-            return self::compositeTypeDescriptor(
-                'union',
-                array_map(fn(Node $member): string => $this->nodeTypeDescriptor($member), $type->types),
-            );
-        }
-
-        if ($type instanceof NodeIntersectionType) {
-            return self::compositeTypeDescriptor(
-                'intersection',
-                array_map(fn(Node $member): string => $this->nodeTypeDescriptor($member), $type->types),
-            );
-        }
-
-        if ($type instanceof Identifier || $type instanceof Name) {
-            return 'named:' . strtolower(ltrim($type->toString(), '\\'));
-        }
-
-        return 'node:' . $type->getType();
-    }
-
-    private function reflectionTypeDescriptor(?ReflectionType $type): string
-    {
-        if ($type === null) {
-            return '';
-        }
-
-        if ($type instanceof ReflectionNamedType) {
-            $descriptor = 'named:' . strtolower(ltrim($type->getName(), '\\'));
-            if (
-                $type->allowsNull()
-                && strtolower($type->getName()) !== 'null'
-                && strtolower($type->getName()) !== 'mixed'
-            ) {
-                return self::compositeTypeDescriptor('union', [$descriptor, 'named:null']);
-            }
-
-            return $descriptor;
-        }
-
-        if ($type instanceof ReflectionUnionType) {
-            return self::compositeTypeDescriptor(
-                'union',
-                array_map(
-                    fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member),
-                    $type->getTypes(),
-                ),
-            );
-        }
-
-        if ($type instanceof ReflectionIntersectionType) {
-            return self::compositeTypeDescriptor(
-                'intersection',
-                array_map(
-                    fn(ReflectionType $member): string => $this->reflectionTypeDescriptor($member),
-                    $type->getTypes(),
-                ),
-            );
-        }
-
-        return 'reflection:' . (string) $type;
-    }
-
-    /** @param array<string> $members */
-    private static function compositeTypeDescriptor(string $kind, array $members): string
-    {
-        sort($members, SORT_STRING);
-
-        return $kind . ':(' . implode(',', $members) . ')';
-    }
-
-    private function defaultMatches(Node\Expr $nodeDefault, ReflectionParameter $parameter): bool
-    {
-        if ($parameter->isDefaultValueConstant()) {
-            $expected = $parameter->getDefaultValueConstantName();
-            if ($expected === null) {
-                return false;
-            }
-
-            return in_array(
-                self::normalizeConstantName($expected),
-                array_map(self::normalizeConstantName(...), $this->defaultConstantNames($nodeDefault)),
-                true,
-            );
-        }
-
-        $reflectionDefault = self::reflectionParameterDefaultSyntax($parameter);
-        if ($reflectionDefault === null || self::reflectionExpressionMayExecute($reflectionDefault)) {
-            throw ClosureExportException::unverifiableParameterDefault(
-                $parameter,
-                new \RuntimeException('Reading the runtime default value may execute or autoload user code.'),
-            );
-        }
-
-        try {
-            $actual = (new ConstExprEvaluator())->evaluateSilently($nodeDefault);
-        } catch (ConstExprEvaluationException $e) {
-            throw ClosureExportException::unverifiableParameterDefault($parameter, $e);
-        }
-
-        return self::sameValue($actual, $parameter->getDefaultValue());
-    }
-
-    private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
-    {
-        $signature = (string) $parameter;
-        $marker = ' = ';
-        $start = strpos($signature, $marker);
-        $end = strrpos($signature, ' ]');
-        if ($start === false || $end === false) {
-            return null;
-        }
-
-        $start += strlen($marker);
-        if ($end < $start) {
-            return null;
-        }
-
-        return substr($signature, $start, $end - $start);
-    }
-
-    /** @return list<string> */
-    private function defaultConstantNames(Node\Expr $expression): array
-    {
-        if ($expression instanceof ConstFetch) {
-            $names = [$expression->name->toString()];
-            $namespaced = $expression->name->getAttribute('namespacedName');
-            if ($namespaced instanceof Name) {
-                $names[] = $namespaced->toString();
-            }
-
-            return array_values(array_unique($names));
-        }
-
-        if (
-            $expression instanceof ClassConstFetch
-            && $expression->class instanceof Name
-            && $expression->name instanceof Identifier
-        ) {
-            return [$expression->class->toString() . '::' . $expression->name->toString()];
-        }
-
-        return [$this->printer->prettyPrintExpr($expression)];
-    }
-
-    private static function normalizeConstantName(string $name): string
-    {
-        return ltrim($name, '\\');
-    }
-
-    private static function sameValue(mixed $left, mixed $right): bool
-    {
-        if (is_float($left) && is_float($right)) {
-            if (is_nan($left) || is_nan($right)) {
-                return is_nan($left) && is_nan($right);
-            }
-
-            return pack('d', $left) === pack('d', $right);
-        }
-
-        if (is_array($left) && is_array($right)) {
-            if (array_keys($left) !== array_keys($right)) {
-                return false;
-            }
-
-            foreach ($left as $key => $value) {
-                if (!self::sameValue($value, $right[$key])) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        return $left === $right;
-    }
-
-    /** @return array<string, mixed> */
-    private static function closureUsedVariables(ReflectionFunction $reflection): array
-    {
-        /** @var array<string, mixed> $variables */
-        $variables = $reflection->getClosureUsedVariables();
-
-        return $variables;
-    }
-
-    private function resolveMagicConstants(
-        ClosureNode|ArrowFunction $node,
-        ClosureSourceCandidate $candidate,
-        ReflectionFunction $reflection,
-    ): void {
-        $scope = $reflection->getClosureScopeClass();
-        $className = $candidate->trait !== ''
-            ? ($scope?->getName() ?? '')
-            : $candidate->class;
-        $traverser = new NodeTraverser(new MagicConstantResolver(
-            $reflection->getFileName() ?: '',
-            $candidate->namespace,
-            $reflection->getName(),
-            $className,
-            $candidate->trait,
-        ));
-        $traverser->traverse([$node]);
-    }
-
-    private function assertNoStaticLocalState(ReflectionFunction $reflection): void
-    {
-        $staticLocals = array_diff_key(
-            $reflection->getStaticVariables(),
-            self::closureUsedVariables($reflection),
-        );
-        if ($staticLocals === []) {
+        if ($target instanceof Variable) {
             return;
         }
 
-        $names = array_map(
-            static fn(string $name): string => '$' . $name,
-            array_keys($staticLocals),
-        );
+        if ($target instanceof Array_ || $target instanceof List_) {
+            foreach ($target->items as $item) {
+                if ($item !== null) {
+                    $this->collectReadVariableNames($item->key, $names);
+                    $this->collectAssignmentTargetReads($item->value, $names);
+                }
+            }
 
-        throw new ClosureExportException(
-            sprintf(
-                'Closure static local variables cannot be exported because their live runtime state is not reconstructable from source: %s.',
-                implode(', ', $names),
-            ),
-            ['variables' => array_keys($staticLocals)],
-            $reflection->getFileName() ?: null,
-            $reflection->getStartLine() ?: null,
-        );
-    }
-
-    private function resolveSourceSymbols(ClosureNode|ArrowFunction $node): void
-    {
-        (new NodeTraverser(new SourceSymbolResolver()))->traverse([$node]);
-    }
-
-    private function assertNoByReferenceCapture(
-        ClosureNode|ArrowFunction $node,
-        ReflectionFunction $reflection,
-    ): void {
-        if (!$node instanceof ClosureNode) {
             return;
         }
 
-        $invalid = [];
-        foreach ($node->uses as $use) {
-            if ($use->byRef && is_string($use->var->name)) {
-                $invalid[$use->var->name] = 'captured by reference';
-            }
-        }
-
-        if ($invalid !== []) {
-            throw ClosureExportException::cannotInlineUseVariables(
-                $invalid,
-                $reflection->getFileName() ?: null,
-                $reflection->getStartLine() ?: null,
-            );
-        }
+        $this->collectReadVariableNames($target, $names);
     }
 
     private function isolateUnboundClosure(
         Node\Expr $node,
-        ClosureNode|ArrowFunction $sourceNode,
         ReflectionFunction $reflection,
     ): Node\Expr {
-        if ($reflection->isStatic()) {
+        if ($reflection->isStatic() || $reflection->getClosureUsedVariables() !== []) {
             return $node;
-        }
-
-        if (
-            $this->config->closureUseMode === ClosureUseMode::Inline
-            && self::closureUsedVariables($reflection) !== []
-        ) {
-            return $node;
-        }
-
-        $uses = [];
-        if ($this->config->closureUseMode === ClosureUseMode::Preserve) {
-            if ($sourceNode instanceof ClosureNode) {
-                foreach ($sourceNode->uses as $use) {
-                    if (!is_string($use->var->name)) {
-                        continue;
-                    }
-
-                    $uses[] = new ClosureUse(
-                        new Variable($use->var->name),
-                        $use->byRef,
-                    );
-                }
-            } else {
-                foreach (array_keys(self::closureUsedVariables($reflection)) as $name) {
-                    $uses[] = new ClosureUse(new Variable($name));
-                }
-            }
         }
 
         return new FuncCall(new ClosureNode([
             'static' => true,
-            'uses' => $uses,
             'stmts' => [new Return_($node)],
         ]));
     }
 
-    private function restoreRuntimeScope(Node\Expr $node, ReflectionFunction $reflection): Node\Expr
-    {
+    private function restoreRuntimeScope(
+        Node\Expr $node,
+        ReflectionFunction $reflection,
+    ): Node\Expr {
         $scope = $reflection->getClosureScopeClass();
-        $scopeArgument = $scope === null
-            ? new ConstFetch(new Name('null'))
-            : new ClassConstFetch(
-                new FullyQualified($scope->getName()),
-                new Identifier('class'),
-            );
+        if ($scope === null) {
+            return $node;
+        }
 
         return new StaticCall(
             new FullyQualified(Closure::class),
@@ -934,71 +1193,11 @@ final readonly class ClosureExporter
             [
                 new Node\Arg($node),
                 new Node\Arg(new ConstFetch(new Name('null'))),
-                new Node\Arg($scopeArgument),
+                new Node\Arg(new ClassConstFetch(
+                    new FullyQualified($scope->getName()),
+                    new Identifier('class'),
+                )),
             ],
         );
-    }
-
-    private function formatCompact(string $code): string
-    {
-        $tokens = \PhpToken::tokenize('<?php ' . $code);
-        $result = '';
-        $pendingSpace = false;
-
-        foreach ($tokens as $index => $token) {
-            if ($index === 0 && $token->is(T_OPEN_TAG)) {
-                continue;
-            }
-
-            if ($token->is([T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
-                $pendingSpace = $result !== '';
-                continue;
-            }
-
-            if ($pendingSpace) {
-                $result .= ' ';
-                $pendingSpace = false;
-            }
-
-            $result .= $token->text;
-        }
-
-        return trim($result);
-    }
-
-    private function formatPretty(string $code, string $baseIndent): string
-    {
-        if ($baseIndent === '' || !str_contains($code, "\n")) {
-            return $code;
-        }
-
-        $tokens = \PhpToken::tokenize('<?php ' . $code);
-        $result = '';
-
-        foreach ($tokens as $index => $token) {
-            if ($index === 0 && $token->is(T_OPEN_TAG)) {
-                continue;
-            }
-
-            if ($this->isStringLiteralToken($token)) {
-                $result .= $token->text;
-                continue;
-            }
-
-            $result .= str_replace("\n", "\n" . $baseIndent, $token->text);
-        }
-
-        return $result;
-    }
-
-    private function isStringLiteralToken(\PhpToken $token): bool
-    {
-        return $token->is([
-            T_CONSTANT_ENCAPSED_STRING,
-            T_ENCAPSED_AND_WHITESPACE,
-            T_START_HEREDOC,
-            T_END_HEREDOC,
-            T_INLINE_HTML,
-        ]);
     }
 }

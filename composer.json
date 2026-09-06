@@ -1,6 +1,6 @@
 {
     "name": "componenta/var-export",
-    "description": "Generate deterministic executable PHP expressions for scalars, arrays, closures, enums, and explicitly enabled readonly value objects",
+    "description": "Export scalars, arrays, enums, and portable closures as executable PHP expressions",
     "type": "library",
     "license": "MIT",
     "keywords": [
@@ -33,10 +33,7 @@
     "autoload": {
         "psr-4": {
             "Componenta\\VarExport\\": "src/"
-        },
-        "files": [
-            "src/functions.php"
-        ]
+        }
     },
     "autoload-dev": {
         "psr-4": {
@@ -52,8 +49,8 @@
     "scripts": {
         "test": "pest",
         "test-coverage": "pest --coverage --min=90",
-        "mutation": "pest --mutate --everything --parallel --covered-only --min=70 --compact",
-        "phpstan": "phpstan analyse src --level=max",
+        "mutation": "pest --mutate --path=src --everything --min=90 --compact",
+        "phpstan": "phpstan analyse src tests --level=max",
         "cs-check": "php-cs-fixer fix --dry-run --diff",
         "cs-fix": "php-cs-fixer fix",
         "check": [

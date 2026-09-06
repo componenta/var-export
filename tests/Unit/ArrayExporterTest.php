@@ -1,0 +1,127 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Componenta\VarExport\Tests\Unit;
+
+use Componenta\VarExport\ArrayExporter;
+use Componenta\VarExport\ClosureExporter;
+use Componenta\VarExport\EnumExporter;
+use Componenta\VarExport\Exception\ExportException;
+use Componenta\VarExport\ScalarExporter;
+use Componenta\VarExport\Tests\Double\CallbackExporter;
+use Componenta\VarExport\VarExport;
+use stdClass;
+
+use function Componenta\VarExport\Tests\Support\evaluateExpression;
+
+it('returns null for values that are not arrays without requiring a binding', function (): void {
+    expect(new ArrayExporter()->export('not an array'))->toBeNull();
+});
+
+it('requires direct array exporters to be immutably bound first', function (): void {
+    $exporter = new ArrayExporter();
+    $bound = $exporter->withVarExport(VarExport::withDefaults());
+
+    expect($bound)->not->toBe($exporter)
+        ->and(fn (): ?string => $exporter->export([]))->toThrow(ExportException::class)
+        ->and($bound->export([]))->toBe('[]');
+});
+
+it('exports an empty array on one line', function (): void {
+    expect(VarExport::withDefaults()->export([]))->toBe('[]');
+});
+
+it('exports non-empty lists as four-space indented multiline expressions with a trailing comma', function (): void {
+    expect(VarExport::withDefaults()->export([1, 'two']))->toBe(<<<'PHP'
+[
+    1,
+    "two",
+]
+PHP);
+});
+
+it('preserves associative and mixed key order', function (): void {
+    $value = ['first' => 1, 7 => 'seven', 'last' => true];
+
+    expect(VarExport::withDefaults()->export($value))->toBe(<<<'PHP'
+[
+    "first" => 1,
+    7 => "seven",
+    "last" => true,
+]
+PHP);
+});
+
+it('exports the minimum integer key without float coercion', function (): void {
+    $value = [PHP_INT_MIN => 'minimum'];
+    $minimum = (string) (PHP_INT_MIN + 1) . ' - 1';
+    $expression = VarExport::withDefaults()->export($value);
+
+    expect($expression)->toBe("[\n    {$minimum} => \"minimum\",\n]")
+        ->and(evaluateExpression($expression))->toBe($value);
+});
+
+it('formats nested arrays at four spaces per level', function (): void {
+    $value = ['nested' => ['enabled' => true, 'ports' => [80, 443]]];
+
+    expect(VarExport::withDefaults()->export($value))->toBe(<<<'PHP'
+[
+    "nested" => [
+        "enabled" => true,
+        "ports" => [
+            80,
+            443,
+        ],
+    ],
+]
+PHP);
+});
+
+it('delegates custom values through the common orchestrator and indents multiline expressions', function (): void {
+    $customValue = new stdClass();
+    $customExporter = new CallbackExporter(
+        static fn (mixed $var): ?string => $var === $customValue
+            ? "factory(\n    1,\n)"
+            : null,
+    );
+    $varExport = new VarExport(
+        $customExporter,
+        new ScalarExporter(),
+        new ArrayExporter(),
+        new EnumExporter(),
+        new ClosureExporter(),
+    );
+
+    expect($varExport->export(['custom' => $customValue]))->toBe(<<<'PHP'
+[
+    "custom" => factory(
+        1,
+    ),
+]
+PHP);
+});
+
+it('rejects referenced array elements', function (): void {
+    $value = 42;
+    $array = [&$value];
+
+    expect(fn (): string => VarExport::withDefaults()->export($array))
+        ->toThrow(ExportException::class, 'reference');
+});
+
+it('rejects references nested inside child arrays', function (): void {
+    $value = 42;
+    $array = ['nested' => ['value' => &$value]];
+
+    expect(fn (): string => VarExport::withDefaults()->export($array))
+        ->toThrow(ExportException::class, '$array[\'nested\'][\'value\']');
+});
+
+it('rejects recursive reference arrays', function (): void {
+    $array = [];
+    $array['self'] = &$array;
+
+    expect(fn (): string => VarExport::withDefaults()->export($array))
+        ->toThrow(ExportException::class, 'reference');
+});
