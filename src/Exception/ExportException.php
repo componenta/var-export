@@ -45,6 +45,24 @@ class ExportException extends Exception implements ExceptionInterface
         );
     }
 
+    /** @param list<int|string> $path */
+    public static function arrayAppendIndex(array $path): self
+    {
+        return new self(
+            sprintf('Cannot preserve the next append index at %s in an array literal.', self::formatPath('$array', $path)),
+            ['path' => $path],
+        );
+    }
+
+    /** @param list<int|string> $path */
+    public static function arrayPointer(array $path): self
+    {
+        return new self(
+            sprintf('Cannot preserve the array pointer at %s in an array literal.', self::formatPath('$array', $path)),
+            ['path' => $path],
+        );
+    }
+
     public static function nonPortableClosure(
         string $reason,
         ?string $filename = null,

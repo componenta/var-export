@@ -2,3 +2,8 @@
 /composer.lock
 /.phpunit.cache/
 /.php-cs-fixer.cache
+/.phpunit.result.cache
+/.phpstan.cache/
+vendor/
+.phpunit.cache/
+integration/composer.lock

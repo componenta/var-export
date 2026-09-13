@@ -102,6 +102,19 @@ it('delegates custom values through the common orchestrator and indents multilin
 PHP);
 });
 
+it('rejects arrays whose next append index cannot survive a literal export', function (array $array, int $removedKey, bool $nested): void {
+    unset($array[$removedKey]);
+    $value = $nested ? ['nested' => $array] : $array;
+
+    expect(fn (): string => VarExport::withDefaults()->export($value))
+        ->toThrow(ExportException::class, 'next append index');
+})->with([
+    'removed tail' => [['kept', 'removed'], 1, false],
+    'empty after unset' => [[7 => 'removed'], 7, false],
+    'nested empty array' => [[7 => 'removed'], 7, true],
+    'maximum removed key' => [[PHP_INT_MAX => 'removed'], PHP_INT_MAX, false],
+]);
+
 it('rejects referenced array elements', function (): void {
     $value = 42;
     $array = [&$value];

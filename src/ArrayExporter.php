@@ -43,6 +43,19 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         int $depth = 0,
         array $path = [],
     ): string {
+        if (key($array) !== array_key_first($array)) {
+            throw ExportException::arrayPointer($path);
+        }
+
+        $literalKeys = [];
+        foreach ($array as $key => $_) {
+            $literalKeys[$key] = null;
+        }
+
+        if ($this->nextAppendIndex($array) !== $this->nextAppendIndex($literalKeys)) {
+            throw ExportException::arrayAppendIndex($path);
+        }
+
         if ($array === []) {
             return '[]';
         }
@@ -77,6 +90,18 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
             . ",\n"
             . $closingIndent
             . ']';
+    }
+
+    /** @param array<mixed> $array */
+    private function nextAppendIndex(array $array): ?int
+    {
+        if (array_key_exists(PHP_INT_MAX, $array)) {
+            return null;
+        }
+
+        $array[] = null;
+
+        return (int) array_key_last($array);
     }
 
     private function exportKey(int|string $key): string
