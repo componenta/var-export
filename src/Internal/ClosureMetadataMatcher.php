@@ -411,13 +411,7 @@ final class ClosureMetadataMatcher
             );
         }
 
-        $runtimeValue = $parameter->getDefaultValue();
-        if (is_float($runtimeValue) && is_float($sourceValue['value'])) {
-            return is_nan($runtimeValue) && is_nan($sourceValue['value'])
-                || pack('d', $runtimeValue) === pack('d', $sourceValue['value']);
-        }
-
-        return $runtimeValue === $sourceValue['value'];
+        return self::sameValue($parameter->getDefaultValue(), $sourceValue['value']);
     }
 
     private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
@@ -540,6 +534,10 @@ final class ClosureMetadataMatcher
             }
 
             if ($item->key === null) {
+                if (array_key_exists(PHP_INT_MAX, $value)) {
+                    return ['verifiable' => false, 'value' => null];
+                }
+
                 $value[] = $itemValue['value'];
 
                 continue;

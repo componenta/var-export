@@ -1247,6 +1247,10 @@ it('rejects source whose reflected signature changed after closure creation', fu
         '<?php return static fn (int $value = 1): int => $value;',
         '<?php return static fn (int $value = 2): int => $value;',
     ],
+    'nested signed-zero default' => [
+        '<?php return static fn (array $value = [[-0.0]]): array => $value;',
+        '<?php return static fn (array $value = [[0.0]]): array => $value;',
+    ],
     'parameter reference mode' => [
         '<?php return static fn (int $value): int => $value;',
         '<?php return static fn (int &$value): int => $value;',
@@ -1344,3 +1348,23 @@ it('rejects an invalid custom expression used for a safe capture', function (str
     'syntax error' => ['not valid ???'],
     'statement injection' => ['42; phpinfo()'],
 ]);
+
+it('rejects an invalid append in a modified parameter default with a library exception', function (): void {
+    $path = createTemporaryPhpFile(
+        'componenta-default-append-',
+        '<?php return static fn (array $value = [1]): array => $value;',
+    );
+
+    try {
+        $closure = requireClosureFile($path);
+        overwriteFile(
+            $path,
+            '<?php return static fn (array $value = [' . PHP_INT_MAX . ' => 1, 2]): array => $value;',
+        );
+
+        expect(fn (): string => VarExport::withDefaults()->export($closure))
+            ->toThrow(ExportException::class, 'parameter default');
+    } finally {
+        unlink($path);
+    }
+});
