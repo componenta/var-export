@@ -23,6 +23,9 @@ use ReflectionFunction;
 
 final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
 {
+    /** @var array<string, mixed>|null */
+    private ?array $userConstants = null;
+
     public function __construct(
         private readonly string $filename,
         private readonly int $line,
@@ -118,9 +121,9 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
             );
         }
 
-        $userConstants = get_defined_constants(true)['user'] ?? [];
+        $this->userConstants ??= get_defined_constants(true)['user'] ?? [];
 
-        if (array_key_exists($resolved, $userConstants)) {
+        if (array_key_exists($resolved, $this->userConstants)) {
             throw $this->failure(
                 sprintf('runtime user-defined constant "%s" is not portable', $resolved),
                 $node,

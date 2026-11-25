@@ -8,7 +8,7 @@ use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\VarExport;
 use PhpParser\Node;
 use PhpParser\Node\Stmt\Return_;
-use PhpParser\ParserFactory;
+use PhpParser\Parser;
 use ReflectionReference;
 use Throwable;
 use UnitEnum;
@@ -25,6 +25,7 @@ final class UseVariableValueNodeFactory
         string $variable,
         int $maxDepth,
         VarExport $varExport,
+        Parser $parser,
         int $depth = 0,
         array $path = [],
         ?string $filename = null,
@@ -42,9 +43,7 @@ final class UseVariableValueNodeFactory
 
         $expression = $varExport->export($value);
         try {
-            $statements = (new ParserFactory())
-                ->createForHostVersion()
-                ->parse('<?php return ' . $expression . ';');
+            $statements = $parser->parse('<?php return ' . $expression . ';');
         } catch (Throwable $error) {
             throw new ExportException(
                 sprintf('Exporter returned an invalid expression for captured variable $%s.', $variable),

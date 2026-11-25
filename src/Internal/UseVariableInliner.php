@@ -14,6 +14,7 @@ use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Stmt\Expression;
 use PhpParser\Node\Stmt\Return_;
+use PhpParser\ParserFactory;
 
 /**
  * Builds a self-contained creator expression instead of replacing variable
@@ -41,6 +42,7 @@ final readonly class UseVariableInliner
             return $closure;
         }
 
+        $parser = (new ParserFactory())->createForHostVersion();
         $statements = [];
         foreach ($variables as $name => $value) {
             $statements[] = new Expression(new Assign(
@@ -50,6 +52,7 @@ final readonly class UseVariableInliner
                     $name,
                     $maxDepth,
                     $varExport,
+                    $parser,
                     depth: $captureDepth,
                     filename: $filename,
                     line: $line,

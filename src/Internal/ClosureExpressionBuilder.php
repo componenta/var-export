@@ -16,6 +16,8 @@ use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\Return_;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\CloningVisitor;
 use PhpParser\ParserFactory;
 use PhpParser\PhpVersion;
 use PhpParser\PrettyPrinter\Standard as PrettyPrinter;
@@ -29,6 +31,9 @@ final class ClosureExpressionBuilder
 
     private readonly UseVariableInliner $inliner;
     private readonly PrettyPrinter $printer;
+
+    /** @var array<int, FuncCall> */
+    private array $guardTemplates = [];
 
     public function __construct()
     {
@@ -61,6 +66,28 @@ final class ClosureExpressionBuilder
     }
 
     private function guardStrictTypes(Node\Expr $node, bool $sourceUsesStrictTypes): Node\Expr
+    {
+        $key = (int) $sourceUsesStrictTypes;
+        $template = $this->guardTemplates[$key] ??= $this->createStrictTypesGuard($sourceUsesStrictTypes);
+        $nodes = (new NodeTraverser(new CloningVisitor()))->traverse([$template]);
+        $guard = $nodes[0] ?? null;
+        if (!$guard instanceof FuncCall || !$guard->name instanceof ClosureNode) {
+            throw new \LogicException('Unable to copy the closure strict_types guard.');
+        }
+
+        $factory = $guard->name;
+        $lastIndex = count($factory->stmts) - 1;
+        $lastReturn = $factory->stmts[$lastIndex] ?? null;
+        if (!$lastReturn instanceof Return_) {
+            throw new \LogicException('Unable to build the closure strict_types guard.');
+        }
+
+        $lastReturn->expr = $node;
+
+        return $guard;
+    }
+
+    private function createStrictTypesGuard(bool $sourceUsesStrictTypes): FuncCall
     {
         $sourceMode = $sourceUsesStrictTypes ? 'true' : 'false';
         $statements = (new ParserFactory())
@@ -97,15 +124,6 @@ PHP, $sourceMode, $sourceMode, $sourceMode));
         ) {
             throw new \LogicException('Unable to build the closure strict_types guard.');
         }
-
-        $factory = $return->expr->name;
-        $lastIndex = count($factory->stmts) - 1;
-        $lastReturn = $factory->stmts[$lastIndex] ?? null;
-        if (!$lastReturn instanceof Return_) {
-            throw new \LogicException('Unable to build the closure strict_types guard.');
-        }
-
-        $lastReturn->expr = $node;
 
         return $return->expr;
     }
