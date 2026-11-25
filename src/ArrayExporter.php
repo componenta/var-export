@@ -14,9 +14,15 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
     private const int MAX_DEPTH = 256;
 
     private ?VarExport $varExport = null;
+    private readonly ScalarExporter $keyExporter;
 
     /** @var array<int, int> */
     private array $activeDepths = [];
+
+    public function __construct()
+    {
+        $this->keyExporter = new ScalarExporter();
+    }
 
     public function withVarExport(VarExport $varExport): static
     {
@@ -63,29 +69,26 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
     private function exportArray(array $array, VarExport $varExport): string
     {
         if (key($array) !== array_key_first($array)) {
-            throw ExportException::arrayPointer([]);
+            throw ArrayExportException::pointer([]);
         }
 
-        $literalKeys = [];
-        foreach ($array as $key => $_) {
-            $literalKeys[$key] = null;
-        }
+        $isList = array_is_list($array);
+        $literalIndex = $isList ? count($array) : $this->literalAppendIndex($array);
 
-        if ($this->nextAppendIndex($array) !== $this->nextAppendIndex($literalKeys)) {
-            throw ExportException::arrayAppendIndex([]);
+        if ($this->nextAppendIndex($array) !== $literalIndex) {
+            throw ArrayExportException::appendIndex([]);
         }
 
         if ($array === []) {
             return '[]';
         }
 
-        $isList = array_is_list($array);
         $itemIndent = '    ';
         $entries = [];
 
         foreach ($array as $key => $value) {
             if (ReflectionReference::fromArrayElement($array, $key) !== null) {
-                throw ExportException::arrayReference([$key]);
+                throw ArrayExportException::reference([$key]);
             }
 
             try {
@@ -124,9 +127,26 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         return (int) array_key_last($array);
     }
 
+    /** @param array<mixed> $array */
+    private function literalAppendIndex(array $array): ?int
+    {
+        $maximum = null;
+        foreach ($array as $key => $_) {
+            if (is_int($key) && ($maximum === null || $key > $maximum)) {
+                $maximum = $key;
+            }
+        }
+
+        if ($maximum === PHP_INT_MAX) {
+            return null;
+        }
+
+        return $maximum === null ? 0 : $maximum + 1;
+    }
+
     private function exportKey(int|string $key): string
     {
-        return new ScalarExporter()->export($key)
+        return $this->keyExporter->export($key)
             ?? throw new \LogicException('Array keys are always supported by ScalarExporter.');
     }
 

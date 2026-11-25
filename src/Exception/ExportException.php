@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Exception;
 
-use Componenta\VarExport\Internal\ArrayExportException;
 use Exception;
 use Throwable;
 
@@ -40,30 +39,27 @@ class ExportException extends Exception implements ExceptionInterface
     /** @param list<int|string> $path */
     public static function arrayReference(array $path): self
     {
-        return new ArrayExportException(
+        return new self(
             sprintf('Cannot export array reference at %s.', self::formatPath('$array', $path)),
-            $path,
-            'reference',
+            ['path' => $path],
         );
     }
 
     /** @param list<int|string> $path */
     public static function arrayAppendIndex(array $path): self
     {
-        return new ArrayExportException(
+        return new self(
             sprintf('Cannot preserve the next append index at %s in an array literal.', self::formatPath('$array', $path)),
-            $path,
-            'append_index',
+            ['path' => $path],
         );
     }
 
     /** @param list<int|string> $path */
     public static function arrayPointer(array $path): self
     {
-        return new ArrayExportException(
+        return new self(
             sprintf('Cannot preserve the array pointer at %s in an array literal.', self::formatPath('$array', $path)),
-            $path,
-            'pointer',
+            ['path' => $path],
         );
     }
 

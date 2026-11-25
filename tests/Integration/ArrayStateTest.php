@@ -31,6 +31,10 @@ it('preserves append behavior for portable arrays', function (array $source, arr
     'empty' => [[], ['appended']],
     'list' => [['kept'], ['kept', 'appended']],
     'negative key' => [[-5 => 'kept'], [-5 => 'kept', -4 => 'appended']],
+    'negative and string keys' => [['label' => 'kept', -5 => 'negative'], ['label' => 'kept', -5 => 'negative', -4 => 'appended']],
+    'descending negative keys' => [[-5 => 'kept', -10 => 'negative'], [-5 => 'kept', -10 => 'negative', -4 => 'appended']],
+    'minimum key' => [[PHP_INT_MIN => 'kept'], [PHP_INT_MIN => 'kept', PHP_INT_MIN + 1 => 'appended']],
+    'string keys only' => [['label' => 'kept'], ['label' => 'kept', 0 => 'appended']],
     'mixed keys' => [[7 => 'kept', 'name' => 'value'], [7 => 'kept', 'name' => 'value', 8 => 'appended']],
 ]);
 
