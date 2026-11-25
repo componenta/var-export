@@ -119,7 +119,7 @@ It rejects behavior that cannot be reproduced safely in a generated file, includ
 - `$this`, anonymous or incompatible class scope, and static local state;
 - captured objects, resources, and closures;
 - named callables;
-- `eval`, include/require, PHP mode switches, nonportable external `declare` directives, magic constants, nested named declarations, unresolved unqualified namespace-fallback symbols, runtime user constants, and functions defined only in the provider source file;
+- `eval`, include/require, PHP mode switches, nonportable external `declare` directives, magic constants, nested named declarations, unresolved unqualified namespace-fallback symbols and ambiguous unqualified function calls with both a global and a namespaced target, runtime user constants, and functions defined only in the provider source file;
 - missing, structurally changed, ambiguous, or invalid source.
 
 The provider source must not be modified after the runtime closure is created. PHP Reflection does not expose closure body opcodes, so a body-only edit that preserves the reflected location, signature, and captures cannot be detected safely without executing user code.

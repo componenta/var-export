@@ -82,11 +82,23 @@ final class ClosurePortabilityAnalyzer extends NodeVisitorAbstract
     private function resolveFunction(Name $name, Node $node): FullyQualified
     {
         $resolved = $this->resolvedName($name, true);
-        if (self::hasNamespaceFallback($name) && !function_exists($resolved)) {
-            throw $this->failure(
-                sprintf('unresolved unqualified function "%s" has namespace fallback semantics', $name),
-                $node,
-            );
+        if (self::hasNamespaceFallback($name)) {
+            if (!function_exists($resolved)) {
+                throw $this->failure(
+                    sprintf('unresolved unqualified function "%s" has namespace fallback semantics', $name),
+                    $node,
+                );
+            }
+
+            // PHP may already have cached a global fallback before the
+            // namespaced function was declared. Reflection cannot reveal that
+            // cached target; choosing either existing function would be unsafe.
+            if ($resolved !== $name->toString() && function_exists($name->toString())) {
+                throw $this->failure(
+                    sprintf('ambiguous unqualified function "%s" has namespace fallback semantics', $name),
+                    $node,
+                );
+            }
         }
 
         if (function_exists($resolved)) {
