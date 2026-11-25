@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Internal;
 
 use Componenta\VarExport\Exception\ExportException;
+use PhpParser\Error as ParserError;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure as ClosureNode;
@@ -156,7 +157,18 @@ final class ClosureSourceResolver
             );
         }
 
-        $statements = (new NodeTraverser(new NameResolver()))->traverse($statements);
+        try {
+            $statements = (new NodeTraverser(new NameResolver()))->traverse($statements);
+        } catch (ParserError $error) {
+            throw new ExportException(
+                sprintf('Cannot resolve names in closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $error->getStartLine() > 0 ? $error->getStartLine() : $startLine,
+                $error,
+            );
+        }
+
         $statements = (new NodeTraverser(new ParentConnectingVisitor()))->traverse($statements);
         $snapshot = new ClosureSourceSnapshot($source, $statements);
         if (strlen($source) <= self::MAX_CACHED_SOURCE_BYTES) {

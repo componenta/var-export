@@ -66,3 +66,35 @@ it('does not share generated strict-mode guards between strict and coercive sour
         }
     }
 });
+
+it('reports name resolution failures after a provider changes without reusing a stale source snapshot', function (): void {
+    $source = '<?php declare(strict_types=1); use DateTime as Alias; return static fn (): string => Alias::class;';
+    $path = createTemporaryPhpFile('componenta-invalid-alias-', $source);
+    $exporter = VarExport::withDefaults();
+
+    try {
+        $closure = requireClosureFile($path);
+        $expression = $exporter->export($closure);
+        expect(evaluateClosureExpression($expression)())->toBe(\DateTime::class);
+
+        overwriteFile(
+            $path,
+            '<?php declare(strict_types=1); use DateTime as Alias; use DateTimeImmutable as Alias; return static fn (): string => Alias::class;',
+        );
+
+        try {
+            $exporter->export($closure);
+            throw new \LogicException('Expected conflicting imports to be rejected.');
+        } catch (ExportException $error) {
+            expect($error->getMessage())->toContain('Cannot resolve names')
+                ->and($error->getPrevious())->toBeInstanceOf(\PhpParser\Error::class)
+                ->and($error->context['filename'])->toBe($path)
+                ->and($error->getFile())->toBe($path);
+        }
+
+        overwriteFile($path, $source);
+        expect($exporter->export($closure))->toBe($expression);
+    } finally {
+        unlink($path);
+    }
+});
