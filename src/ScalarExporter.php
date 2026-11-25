@@ -41,7 +41,11 @@ final readonly class ScalarExporter implements VarExportInterface
         "\x1F" => '\\x1F',
         "\x7F" => '\\x7F',
         "\x22" => '\\"',
-        "\x24" => '\\(mixed $var): ?string
+        "\x24" => '\\$',
+        "\x5C" => '\\\\',
+    ];
+
+    public function export(mixed $var): ?string
     {
         return match (true) {
             $var === null => 'null',
