@@ -174,7 +174,7 @@ it('preserves diagnostics through nested default and directly bound array export
     }
 })->with([false, true]);
 
-it('keeps independent recursive exports isolated when a custom exporter suspends a Fiber', function (): void {
+it('keeps independent recursive exports isolated when a custom exporter suspends a Fiber', function (bool $direct): void {
     $marker = new stdClass();
     $custom = new CallbackExporter(static function (mixed $var) use ($marker): ?string {
         if ($var !== $marker) {
@@ -185,7 +185,10 @@ it('keeps independent recursive exports isolated when a custom exporter suspends
 
         return '42';
     });
-    $exporter = new VarExport($custom, new ScalarExporter(), new ArrayExporter());
+    $chain = $direct
+        ? new VarExport($custom, new ScalarExporter())
+        : new VarExport($custom, new ScalarExporter(), new ArrayExporter());
+    $exporter = $direct ? new ArrayExporter()->withVarExport($chain) : $chain;
     $nested = $marker;
     $expected = 42;
     for ($depth = 0; $depth < 256; ++$depth) {
@@ -193,9 +196,9 @@ it('keeps independent recursive exports isolated when a custom exporter suspends
         $expected = [$expected];
     }
 
-    $fiber = new \Fiber(static fn (): string => $exporter->export($nested));
+    $fiber = new \Fiber(static fn (): string => \Componenta\VarExport\Tests\Support\requireExpression($exporter->export($nested)));
     expect($fiber->start())->toBe('paused')
-        ->and(evaluateExpression($exporter->export([1])))->toBe([1]);
+        ->and(evaluateExpression(\Componenta\VarExport\Tests\Support\requireExpression($exporter->export([1]))))->toBe([1]);
     $fiber->resume();
 
     $result = $fiber->getReturn();
@@ -204,7 +207,7 @@ it('keeps independent recursive exports isolated when a custom exporter suspends
     }
 
     expect(evaluateExpression($result))->toBe($expected);
-});
+})->with([false, true]);
 
 it('exports nested arrays directly with a chain that has no array exporter', function (): void {
     $bound = new ArrayExporter()->withVarExport(new VarExport(new ScalarExporter()));
@@ -241,3 +244,22 @@ it('uses the same array nesting limit for direct and orchestrated export', funct
     expect(evaluateExpression($expression))->toBe($value)
         ->and(fn (): ?string => $bound->export([$value]))->toThrow(ExportException::class, 'deeper than 256');
 })->with([false, true]);
+
+it('does not retry a nested value after a custom exporter throws an unsupported-value exception', function (): void {
+    $failure = new \Componenta\VarExport\Exception\UnsupportedValueException('custom failure');
+    $custom = new CallbackExporter(static function (mixed $value) use ($failure): ?string {
+        if (is_array($value)) {
+            throw $failure;
+        }
+
+        return null;
+    });
+    $bound = new ArrayExporter()->withVarExport(new VarExport($custom, new ScalarExporter()));
+
+    try {
+        $bound->export([[42]]);
+        throw new \LogicException('Expected the custom exporter exception.');
+    } catch (\Componenta\VarExport\Exception\UnsupportedValueException $error) {
+        expect($error)->toBe($failure);
+    }
+});

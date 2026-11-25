@@ -40,7 +40,9 @@ final readonly class VarExport
 
     public function export(mixed $var): string
     {
-        $this->assertInitialized();
+        if (!isset($this->exporters)) {
+            $this->failUninitialized();
+        }
 
         return $this->dispatch($var);
     }
@@ -54,17 +56,17 @@ final readonly class VarExport
      */
     public function exportUsing(ContextualExporterInterface $exporter, mixed $var): string
     {
-        $this->assertInitialized();
+        if (!isset($this->exporters)) {
+            $this->failUninitialized();
+        }
 
         return $exporter->exportInContext($var, $this->context(0, [], $exporter))
             ?? throw UnsupportedValueException::forValue($var);
     }
 
-    private function assertInitialized(): void
+    private function failUninitialized(): never
     {
-        if (!isset($this->exporters)) {
-            throw new ExportException('Cannot export values while exporters are being bound.');
-        }
+        throw new ExportException('Cannot export values while exporters are being bound.');
     }
 
     /** @param list<int|string> $path */
