@@ -91,3 +91,22 @@ it('does not intercept exceptions from custom exporters', function (): void {
 
     expect($caught)->toBe($failure);
 });
+
+it('rejects an export attempted during awareness binding with a library exception', function (): void {
+    $aware = new class implements \Componenta\VarExport\VarExportInterface, \Componenta\VarExport\VarExportAwareInterface {
+        public function withVarExport(VarExport $varExport): static
+        {
+            $varExport->export(42);
+
+            return clone $this;
+        }
+
+        public function export(mixed $var): ?string
+        {
+            return '42';
+        }
+    };
+
+    expect(fn (): VarExport => new VarExport($aware))
+        ->toThrow(ExportException::class, 'while exporters are being bound');
+});

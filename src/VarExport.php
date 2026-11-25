@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport;
 
+use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Exception\UnsupportedValueException;
 
 final readonly class VarExport
@@ -36,6 +37,10 @@ final readonly class VarExport
 
     public function export(mixed $var): string
     {
+        if (!isset($this->exporters)) {
+            throw new ExportException('Cannot export values while exporters are being bound.');
+        }
+
         foreach ($this->exporters as $exporter) {
             $result = $exporter->export($var);
 
