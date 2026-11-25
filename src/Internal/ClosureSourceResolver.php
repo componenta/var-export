@@ -9,7 +9,9 @@ use PhpParser\Error as ParserError;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure as ClosureNode;
+use PhpParser\Node\Scalar\Float_;
 use PhpParser\Node\Scalar\Int_;
+use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Declare_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\CloningVisitor;
@@ -189,6 +191,7 @@ final class ClosureSourceResolver
         ReflectionFunction $reflection,
     ): bool {
         $strictTypes = false;
+        $externalTicks = null;
 
         foreach ($declarations as $declaration) {
             foreach ($declaration->declares as $declare) {
@@ -207,12 +210,29 @@ final class ClosureSourceResolver
                     continue;
                 }
 
+                if ($name === 'ticks') {
+                    $value = $declare->value;
+                    $isDisabled = ($value instanceof Int_ || $value instanceof Float_ || $value instanceof String_)
+                        && (int) $value->value === 0;
+                    $externalTicks = $isDisabled ? null : $declaration;
+
+                    continue;
+                }
+
                 throw ExportException::nonPortableClosure(
                     sprintf('declare(%s) cannot be preserved outside the closure expression', $name),
                     $reflection->getFileName() ?: null,
                     $declaration->getStartLine() ?: $reflection->getStartLine() ?: null,
                 );
             }
+        }
+
+        if ($externalTicks !== null) {
+            throw ExportException::nonPortableClosure(
+                'declare(ticks) cannot be preserved outside the closure expression',
+                $reflection->getFileName() ?: null,
+                $externalTicks->getStartLine() ?: $reflection->getStartLine() ?: null,
+            );
         }
 
         return $strictTypes;
@@ -224,17 +244,26 @@ final class ClosureSourceResolver
             return self::nodeHasAncestor($node, $declaration);
         }
 
-        $parent = $declaration->getAttribute('parent');
-        if ($parent instanceof Node && !self::nodeHasAncestor($node, $parent)) {
+        $declarationPosition = $declaration->getStartFilePos();
+        $nodePosition = $node->getStartFilePos();
+        if ($declarationPosition >= 0 && $nodePosition >= 0 && $declarationPosition > $nodePosition) {
             return false;
         }
 
-        $declarationPosition = $declaration->getStartFilePos();
-        $nodePosition = $node->getStartFilePos();
+        // A semicolon declaration changes the compiler state until the end of an
+        // enclosing scoped declare, not the end of a namespace, function or if.
+        $parent = $declaration->getAttribute('parent');
+        while ($parent instanceof Node) {
+            if ($parent instanceof Declare_ && $parent->stmts !== null
+                && !self::nodeHasAncestor($node, $parent)
+            ) {
+                return false;
+            }
 
-        return $declarationPosition < 0
-            || $nodePosition < 0
-            || $declarationPosition <= $nodePosition;
+            $parent = $parent->getAttribute('parent');
+        }
+
+        return true;
     }
 
     private static function nodeHasAncestor(Node $node, Node $ancestor): bool

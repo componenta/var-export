@@ -15,6 +15,7 @@ use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\Stmt\Declare_;
 use PhpParser\Node\Stmt\Return_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\CloningVisitor;
@@ -75,9 +76,13 @@ final class ClosureExpressionBuilder
             throw new \LogicException('Unable to copy the closure strict_types guard.');
         }
 
-        $factory = $guard->name;
-        $lastIndex = count($factory->stmts) - 1;
-        $lastReturn = $factory->stmts[$lastIndex] ?? null;
+        $directive = $guard->name->stmts[0] ?? null;
+        if (!$directive instanceof Declare_ || $directive->stmts === null) {
+            throw new \LogicException('Unable to isolate the closure compilation directives.');
+        }
+
+        $lastIndex = count($directive->stmts) - 1;
+        $lastReturn = $directive->stmts[$lastIndex] ?? null;
         if (!$lastReturn instanceof Return_) {
             throw new \LogicException('Unable to build the closure strict_types guard.');
         }
@@ -95,24 +100,26 @@ final class ClosureExpressionBuilder
             ->parse(sprintf(<<<'PHP'
 <?php
 return (static function () {
-    if ((static function () {
-        try {
-            (static fn (int $value): int => $value)('1');
-        } catch (\TypeError) {
-            return true;
+    declare(ticks=0) {
+        if ((static function () {
+            try {
+                (static fn (int $value): int => $value)('1');
+            } catch (\TypeError) {
+                return true;
+            }
+            return false;
+        })() !== %s) {
+            throw new \Componenta\VarExport\Exception\ExportException(
+                'Closure strict_types mode does not match the generated PHP file.',
+                [
+                    'source_strict_types' => %s,
+                    'target_strict_types' => !%s,
+                ],
+            );
         }
-        return false;
-    })() !== %s) {
-        throw new \Componenta\VarExport\Exception\ExportException(
-            'Closure strict_types mode does not match the generated PHP file.',
-            [
-                'source_strict_types' => %s,
-                'target_strict_types' => !%s,
-            ],
-        );
-    }
 
-    return null;
+        return null;
+    }
 })();
 PHP, $sourceMode, $sourceMode, $sourceMode));
         $return = $statements[0] ?? null;

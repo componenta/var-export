@@ -110,7 +110,7 @@ $expression = $arrayExporter->export(['answer' => 42]);
 
 PHP automatic globals (`$GLOBALS`, `$_SERVER`, `$_ENV`, and the other superglobals) remain runtime lookups. They are not treated as captures and are not frozen into the generated expression.
 
-The generated closure preserves its original named class scope or absence of class scope, irrespective of the loading class. The generated expression records whether the provider source uses `strict_types`. Loading it from a file compiled under the opposite mode throws `ExportException` instead of silently changing closure behavior.
+The generated closure preserves its original named class scope or absence of class scope, irrespective of the loading class. The generated expression records whether the provider source uses `strict_types`. Loading it from a file compiled under the opposite mode throws `ExportException` instead of silently changing closure behavior. Generated closure expressions isolate tick declarations from the surrounding generated file. A nonzero external tick setting in the provider is rejected, including semicolon declarations in earlier namespaces or functions; an effective reset to zero is supported.
 
 It rejects behavior that cannot be reproduced safely in a generated file, including:
 
@@ -119,7 +119,7 @@ It rejects behavior that cannot be reproduced safely in a generated file, includ
 - `$this`, anonymous or incompatible class scope, and static local state;
 - captured objects, resources, and closures;
 - named callables;
-- `eval`, include/require, PHP mode switches, external `declare` directives other than `strict_types`, magic constants, nested named declarations, unresolved unqualified namespace-fallback symbols, runtime user constants, and functions defined only in the provider source file;
+- `eval`, include/require, PHP mode switches, nonportable external `declare` directives, magic constants, nested named declarations, unresolved unqualified namespace-fallback symbols, runtime user constants, and functions defined only in the provider source file;
 - missing, structurally changed, ambiguous, or invalid source.
 
 The provider source must not be modified after the runtime closure is created. PHP Reflection does not expose closure body opcodes, so a body-only edit that preserves the reflected location, signature, and captures cannot be detected safely without executing user code.

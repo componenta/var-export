@@ -355,6 +355,18 @@ it('rejects source compilation directives that cannot be preserved in an express
     'scoped ticks' => [
         '<?php declare(ticks=1) { return static fn (): int => 42; }',
     ],
+    'earlier namespace with semicolon declaration' => [
+        '<?php namespace ComponentaTicksFirst; declare(ticks=1); namespace ComponentaTicksSecond; return static function (): int { $value = 41; return $value + 1; };',
+    ],
+    'earlier bracketed namespace with semicolon declaration' => [
+        '<?php namespace ComponentaTicksThird { declare(ticks=1); } namespace ComponentaTicksFourth { return static function (): int { $value = 41; return $value + 1; }; }',
+    ],
+    'earlier function with semicolon declaration' => [
+        '<?php $unrelated = static function (): void { declare(ticks=1); }; return static function (): int { $value = 41; return $value + 1; };',
+    ],
+    'earlier conditional with semicolon declaration' => [
+        '<?php if (false) { declare(ticks=1); } return static function (): int { $value = 41; return $value + 1; };',
+    ],
 ]);
 
 it('ignores source compilation directives that do not affect the closure', function (
@@ -380,17 +392,26 @@ declare(ticks=1);
 return $closure;
 PHP,
     ],
-    'ticks inside an unrelated closure' => [<<<'PHP'
+    'scoped ticks inside an unrelated closure' => [<<<'PHP'
 <?php
 declare(strict_types=1);
 $unrelated = static function (): int {
-    declare(ticks=1);
-
-    return 1;
+    declare(ticks=1) {
+        return 1;
+    }
 };
 
 return static fn (): int => 42;
 PHP,
+    ],
+    'semicolon declaration in a completed scoped declaration' => [
+        '<?php declare(strict_types=1); declare(ticks=1) { declare(ticks=2); } return static function (): int { $value = 41; return $value + 1; };',
+    ],
+    'ticks reset before closure' => [
+        '<?php declare(strict_types=1); declare(ticks=1); declare(ticks=0); return static function (): int { $value = 41; return $value + 1; };',
+    ],
+    'scoped ticks reset around closure' => [
+        '<?php declare(strict_types=1); declare(ticks=1); declare(ticks=0) { return static function (): int { $value = 41; return $value + 1; }; }',
     ],
 ]);
 
