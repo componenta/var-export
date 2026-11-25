@@ -5,16 +5,27 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Internal;
 
 use Closure;
+use Componenta\VarExport\Exception\ExportException;
+use Componenta\VarExport\VarExport;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\BinaryOp\BooleanAnd;
+use PhpParser\Node\Expr\BinaryOp\BooleanOr;
+use PhpParser\Node\Expr\BinaryOp\Coalesce;
+use PhpParser\Node\Expr\BooleanNot;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
 use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Ternary;
+use PhpParser\Node\Expr\Throw_;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Declare_;
 use PhpParser\Node\Stmt\Return_;
 use PhpParser\NodeTraverser;
@@ -22,8 +33,8 @@ use PhpParser\NodeVisitor\CloningVisitor;
 use PhpParser\ParserFactory;
 use PhpParser\PhpVersion;
 use PhpParser\PrettyPrinter\Standard as PrettyPrinter;
+use ReflectionClass;
 use ReflectionFunction;
-use Componenta\VarExport\VarExport;
 
 /** @internal */
 final class ClosureExpressionBuilder
@@ -169,19 +180,66 @@ PHP, $sourceMode, $sourceMode, $sourceMode));
         ReflectionFunction $reflection,
     ): Node\Expr {
         $scope = $reflection->getClosureScopeClass();
-        return new StaticCall(
+        $scopeName = $scope?->getName();
+        $binding = new StaticCall(
             new FullyQualified(Closure::class),
             new Identifier('bind'),
             [
                 new Node\Arg($node),
                 new Node\Arg(new ConstFetch(new Name('null'))),
-                new Node\Arg($scope === null
+                new Node\Arg($scopeName === null
                     ? new ConstFetch(new Name('null'))
                     : new ClassConstFetch(
-                        new FullyQualified($scope->getName()),
+                        new FullyQualified($scopeName),
                         new Identifier('class'),
                     )),
             ],
+        );
+        $failure = new Throw_(new New_(
+            new FullyQualified(ExportException::class),
+            [new Node\Arg(new String_(
+                $scopeName === null
+                    ? 'Cannot restore unscoped closure.'
+                    : sprintf('Cannot restore closure class scope "%s".', $scopeName),
+            ))],
+        ));
+        $binding = new Coalesce($binding, $failure);
+
+        if ($scopeName === null) {
+            return $binding;
+        }
+
+        // Check the target environment before binding, which otherwise emits a
+        // warning and returns null for missing or internal class scopes.
+        return new Ternary(
+            $this->isBindableScope($scopeName),
+            $binding,
+            clone $failure,
+        );
+    }
+
+    private function isBindableScope(string $scopeName): Node\Expr
+    {
+        $classExists = new FuncCall(new FullyQualified('class_exists'), [
+            new Node\Arg(new String_($scopeName)),
+        ]);
+        $interfaceExists = new FuncCall(new FullyQualified('interface_exists'), [
+            new Node\Arg(new String_($scopeName)),
+            new Node\Arg(new ConstFetch(new Name('false'))),
+        ]);
+        $traitExists = new FuncCall(new FullyQualified('trait_exists'), [
+            new Node\Arg(new String_($scopeName)),
+            new Node\Arg(new ConstFetch(new Name('false'))),
+        ]);
+
+        $isInternal = new MethodCall(
+            new New_(new FullyQualified(ReflectionClass::class), [new Node\Arg(new String_($scopeName))]),
+            new Identifier('isInternal'),
+        );
+
+        return new BooleanAnd(
+            new BooleanOr(new BooleanOr($classExists, $interfaceExists), $traitExists),
+            new BooleanNot($isInternal),
         );
     }
 }

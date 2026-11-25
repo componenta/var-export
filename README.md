@@ -110,7 +110,7 @@ $expression = $arrayExporter->export(['answer' => 42]);
 
 PHP automatic globals (`$GLOBALS`, `$_SERVER`, `$_ENV`, and the other superglobals) remain runtime lookups. They are not treated as captures and are not frozen into the generated expression.
 
-The generated closure preserves its original named class scope or absence of class scope, irrespective of the loading class. The generated expression records whether the provider source uses `strict_types`. Loading it from a file compiled under the opposite mode throws `ExportException` instead of silently changing closure behavior. Generated closure expressions isolate tick declarations from the surrounding generated file. A nonzero external tick setting in the provider is rejected, including semicolon declarations in earlier namespaces or functions; an effective reset to zero is supported.
+The generated closure preserves its original named class scope or absence of class scope, irrespective of the loading class. A named scope must be available as a user-defined class, interface or trait in the loading environment; an unavailable or incompatible scope raises `ExportException`. The generated expression records whether the provider source uses `strict_types`. Loading it from a file compiled under the opposite mode throws `ExportException` instead of silently changing closure behavior. Generated closure expressions isolate tick declarations from the surrounding generated file. A nonzero external tick setting in the provider is rejected, including semicolon declarations in earlier namespaces or functions; an effective reset to zero is supported.
 
 It rejects behavior that cannot be reproduced safely in a generated file, including:
 
