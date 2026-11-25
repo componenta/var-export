@@ -205,3 +205,39 @@ it('keeps independent recursive exports isolated when a custom exporter suspends
 
     expect(evaluateExpression($result))->toBe($expected);
 });
+
+it('exports nested arrays directly with a chain that has no array exporter', function (): void {
+    $bound = new ArrayExporter()->withVarExport(new VarExport(new ScalarExporter()));
+    $value = ['nested' => [42]];
+
+    expect($bound->export($value))->toBe(<<<'PHP'
+[
+    "nested" => [
+        42,
+    ],
+]
+PHP);
+});
+
+it('uses custom nested array exporters before the direct array fallback', function (): void {
+    $custom = new CallbackExporter(static fn (mixed $var): ?string => $var === [42] ? '[99]' : null);
+    $bound = new ArrayExporter()->withVarExport(new VarExport($custom, new ScalarExporter()));
+    $expression = \Componenta\VarExport\Tests\Support\requireExpression($bound->export([[42]]));
+
+    expect(evaluateExpression($expression))->toBe([[99]]);
+});
+
+it('uses the same array nesting limit for direct and orchestrated export', function (bool $withArrayExporter): void {
+    $chain = $withArrayExporter
+        ? new VarExport(new ScalarExporter(), new ArrayExporter())
+        : new VarExport(new ScalarExporter());
+    $bound = new ArrayExporter()->withVarExport($chain);
+    $value = 42;
+    for ($depth = 0; $depth < 256; ++$depth) {
+        $value = [$value];
+    }
+
+    $expression = \Componenta\VarExport\Tests\Support\requireExpression($bound->export($value));
+    expect(evaluateExpression($expression))->toBe($value)
+        ->and(fn (): ?string => $bound->export([$value]))->toThrow(ExportException::class, 'deeper than 256');
+})->with([false, true]);

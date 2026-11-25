@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace Componenta\VarExport;
 
 use Componenta\VarExport\Exception\ExportException;
-use Componenta\VarExport\Internal\ArrayExportException;
 use Componenta\VarExport\Internal\ContextualExporterInterface;
 use Componenta\VarExport\Internal\ExportContext;
-use Componenta\VarExport\Internal\ExpressionIndentation;
 use ReflectionReference;
 
 final class ArrayExporter implements ContextualExporterInterface, VarExportAwareInterface
@@ -42,23 +40,7 @@ final class ArrayExporter implements ContextualExporterInterface, VarExportAware
             throw ExportException::exporterIsNotBound(self::class);
         }
 
-        $context = new ExportContext(
-            static function (mixed $value, int $depth, array $path) use ($varExport): string {
-                try {
-                    $expression = $varExport->export($value);
-                } catch (ArrayExportException $error) {
-                    if (!is_array($value)) {
-                        throw $error;
-                    }
-
-                    throw $error->withPrependedPath($path);
-                }
-
-                return ExpressionIndentation::atDepth($expression, $depth);
-            },
-        );
-
-        return $this->exportInContext($var, $context);
+        return $varExport->exportUsing($this, $var);
     }
 
     /** @internal */
@@ -73,19 +55,22 @@ final class ArrayExporter implements ContextualExporterInterface, VarExportAware
         }
 
         if ($context->depth >= self::MAX_DEPTH) {
-            throw ArrayExportException::depth(self::MAX_DEPTH, $context->path);
+            throw new ExportException(
+                sprintf('Cannot export an array nested deeper than %d levels.', self::MAX_DEPTH),
+                ['path' => $context->path, 'max_depth' => self::MAX_DEPTH],
+            );
         }
 
         $array = $var;
         if (key($array) !== array_key_first($array)) {
-            throw ArrayExportException::pointer($context->path);
+            throw ExportException::arrayPointer($context->path);
         }
 
         $isList = array_is_list($array);
         $literalIndex = $isList ? count($array) : $this->literalAppendIndex($array);
 
         if ($this->nextAppendIndex($array) !== $literalIndex) {
-            throw ArrayExportException::appendIndex($context->path);
+            throw ExportException::arrayAppendIndex($context->path);
         }
 
         if ($array === []) {
@@ -98,7 +83,7 @@ final class ArrayExporter implements ContextualExporterInterface, VarExportAware
 
         foreach ($array as $key => $value) {
             if (ReflectionReference::fromArrayElement($array, $key) !== null) {
-                throw ArrayExportException::reference([...$context->path, $key]);
+                throw ExportException::arrayReference([...$context->path, $key]);
             }
 
             $expression = $context->exportChild($value, $key);
