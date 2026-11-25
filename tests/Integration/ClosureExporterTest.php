@@ -99,7 +99,7 @@ it('requires direct closure exporters to be immutably bound first', function ():
 
     expect($bound)->not->toBe($exporter)
         ->and(fn (): ?string => $exporter->export(simpleClosure()))->toThrow(ExportException::class)
-        ->and($bound->export(simpleClosure()))->toContain('return static fn(int $value): int => $value + 1;');
+        ->and($bound->export(simpleClosure()))->toContain('return \\Closure::bind(static fn(int $value): int => $value + 1, null, null);');
 });
 
 it('exports a canonical arrow-function expression', function (): void {
@@ -116,7 +116,7 @@ it('exports a canonical arrow-function expression', function (): void {
     if ($componentaVarExportStrictTypes !== true) {
         throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => $componentaVarExportStrictTypes]);
     }
-    return static fn(int $value): int => $value + 1;
+    return \Closure::bind(static fn(int $value): int => $value + 1, null, null);
 })()
 PHP);
 
@@ -138,10 +138,10 @@ it('exports a PSR-formatted block closure', function (): void {
     if ($componentaVarExportStrictTypes !== true) {
         throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => $componentaVarExportStrictTypes]);
     }
-    return static function (int $value): int {
+    return \Closure::bind(static function (int $value): int {
         $next = $value + 1;
         return $next * 2;
-    };
+    }, null, null);
 })()
 PHP);
 
@@ -275,8 +275,11 @@ it('isolates non-static closures from the object evaluating the expression', fun
 
     expect($reflection->getClosureThis())->toBeNull()
         ->and($reflection->getClosureScopeClass()?->getName())->toBe($expectedScope)
+        ->and($reflection->getClosureCalledClass()?->getName())->toBe($expectedScope)
         ->and($restored(...$arguments))->toBe($expected);
 })->with([
+    'static without captures' => [simpleClosure(), [41], 42, null],
+    'static with captures' => [capturedValueClosure(42), [], 42, null],
     'without captures' => [nonStaticUnboundClosure(), [41], 42, null],
     'with a frozen capture' => [nonStaticCapturedClosure(), [], 42, null],
     'with a named class scope' => [

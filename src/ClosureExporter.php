@@ -1183,20 +1183,18 @@ PHP, $sourceMode, $sourceMode));
         ReflectionFunction $reflection,
     ): Node\Expr {
         $scope = $reflection->getClosureScopeClass();
-        if ($scope === null) {
-            return $node;
-        }
-
         return new StaticCall(
             new FullyQualified(Closure::class),
             new Identifier('bind'),
             [
                 new Node\Arg($node),
                 new Node\Arg(new ConstFetch(new Name('null'))),
-                new Node\Arg(new ClassConstFetch(
-                    new FullyQualified($scope->getName()),
-                    new Identifier('class'),
-                )),
+                new Node\Arg($scope === null
+                    ? new ConstFetch(new Name('null'))
+                    : new ClassConstFetch(
+                        new FullyQualified($scope->getName()),
+                        new Identifier('class'),
+                    )),
             ],
         );
     }
