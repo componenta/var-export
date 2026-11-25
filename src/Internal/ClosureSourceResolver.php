@@ -4,15 +4,14 @@ declare(strict_types=1);
 
 namespace Componenta\VarExport\Internal;
 
-use Closure;
 use Componenta\VarExport\Exception\ExportException;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure as ClosureNode;
 use PhpParser\Node\Scalar\Int_;
 use PhpParser\Node\Stmt\Declare_;
-use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\CloningVisitor;
 use PhpParser\NodeVisitor\NameResolver;
 use PhpParser\NodeVisitor\ParentConnectingVisitor;
 use PhpParser\ParserFactory;
@@ -22,7 +21,13 @@ use Throwable;
 /** @internal */
 final class ClosureSourceResolver
 {
+    private const int MAX_CACHED_FILES = 4;
+    private const int MAX_CACHED_SOURCE_BYTES = 262144;
+
     private readonly ClosureMetadataMatcher $matcher;
+
+    /** @var array<string, ClosureSourceSnapshot> */
+    private array $cache = [];
 
     public function __construct()
     {
@@ -50,43 +55,8 @@ final class ClosureSourceResolver
             );
         }
 
-        try {
-            $statements = (new ParserFactory())
-                ->createForHostVersion()
-                ->parse($source);
-        } catch (Throwable $error) {
-            throw new ExportException(
-                sprintf('Cannot parse closure source file "%s".', $filename),
-                ['filename' => $filename],
-                $filename,
-                $startLine,
-                $error,
-            );
-        }
-
-        if ($statements === null) {
-            throw new ExportException(
-                sprintf('Cannot parse closure source file "%s".', $filename),
-                ['filename' => $filename],
-                $filename,
-                $startLine,
-            );
-        }
-
-        $statements = (new NodeTraverser(new NameResolver()))->traverse($statements);
-        $statements = (new NodeTraverser(new ParentConnectingVisitor()))->traverse($statements);
-        $nodes = (new NodeFinder())->find(
-            $statements,
-            fn (Node $node): bool => ($node instanceof ClosureNode || $node instanceof ArrowFunction)
-                && $node->getStartLine() <= $reflection->getStartLine()
-                && $node->getEndLine() === $reflection->getEndLine(),
-        );
-        $candidates = [];
-        foreach ($nodes as $candidate) {
-            if ($candidate instanceof ClosureNode || $candidate instanceof ArrowFunction) {
-                $candidates[] = $candidate;
-            }
-        }
+        $snapshot = $this->snapshot($filename, $source, $startLine);
+        $candidates = $snapshot->candidatesAt($startLine, $endLine);
 
         if ($candidates === []) {
             throw new ExportException(
@@ -141,20 +111,72 @@ final class ClosureSourceResolver
             );
         }
 
-        return [
-            $matches[0],
-            self::sourceUsesStrictTypes($statements, $matches[0], $reflection),
-        ];
+        $strictTypes = self::sourceUsesStrictTypes($snapshot->declarations(), $matches[0], $reflection);
+        // Name resolution and portability analysis may mutate the selected expression.
+        // Never pass cached nodes to the expression builder.
+        $nodes = (new NodeTraverser(new CloningVisitor()))->traverse([$matches[0]]);
+        $node = $nodes[0] ?? null;
+        if (!$node instanceof ClosureNode && !$node instanceof ArrowFunction) {
+            throw new \LogicException('Unable to copy the resolved closure expression.');
+        }
+
+        return [$node, $strictTypes];
     }
 
-    /** @param array<array-key, Node> $statements */
+    private function snapshot(string $filename, string $source, int $startLine): ClosureSourceSnapshot
+    {
+        $cached = $this->cache[$filename] ?? null;
+        unset($this->cache[$filename]);
+        if ($cached !== null && $cached->matchesSource($source)) {
+            $this->cache[$filename] = $cached;
+
+            return $cached;
+        }
+
+        try {
+            $statements = (new ParserFactory())
+                ->createForHostVersion()
+                ->parse($source);
+        } catch (Throwable $error) {
+            throw new ExportException(
+                sprintf('Cannot parse closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $startLine,
+                $error,
+            );
+        }
+
+        if ($statements === null) {
+            throw new ExportException(
+                sprintf('Cannot parse closure source file "%s".', $filename),
+                ['filename' => $filename],
+                $filename,
+                $startLine,
+            );
+        }
+
+        $statements = (new NodeTraverser(new NameResolver()))->traverse($statements);
+        $statements = (new NodeTraverser(new ParentConnectingVisitor()))->traverse($statements);
+        $snapshot = new ClosureSourceSnapshot($source, $statements);
+        if (strlen($source) <= self::MAX_CACHED_SOURCE_BYTES) {
+            if (count($this->cache) >= self::MAX_CACHED_FILES) {
+                array_shift($this->cache);
+            }
+
+            $this->cache[$filename] = $snapshot;
+        }
+
+        return $snapshot;
+    }
+
+    /** @param list<Declare_> $declarations */
     private static function sourceUsesStrictTypes(
-        array $statements,
+        array $declarations,
         ClosureNode|ArrowFunction $closure,
         ReflectionFunction $reflection,
     ): bool {
         $strictTypes = false;
-        $declarations = (new NodeFinder())->findInstanceOf($statements, Declare_::class);
 
         foreach ($declarations as $declaration) {
             foreach ($declaration->declares as $declare) {

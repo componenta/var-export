@@ -8,5 +8,5 @@ use Closure;
 
 function unscopedPrivateConstantClosure(): Closure
 {
-    return static fn (string $class): int => $class::PRIVATE_VALUE;
+    return static fn (string $class): mixed => constant($class . '::PRIVATE_VALUE');
 }

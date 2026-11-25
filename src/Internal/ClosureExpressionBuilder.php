@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Componenta\VarExport\Internal;
 
 use Closure;
-use Componenta\VarExport\Exception\ExportException;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\ClassConstFetch;

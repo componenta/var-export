@@ -10,6 +10,11 @@ final readonly class ObjectContextExpressionEvaluator
 {
     private const int PRIVATE_VALUE = 42;
 
+    public static function privateValue(): int
+    {
+        return self::PRIVATE_VALUE;
+    }
+
     public function evaluateClosure(string $expression): Closure
     {
         $value = eval('declare(strict_types=1); return ' . $expression . ';');

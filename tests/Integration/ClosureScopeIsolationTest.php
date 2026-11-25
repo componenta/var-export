@@ -14,6 +14,7 @@ it('does not grant an unscoped closure access to private members of its loading 
     $original = \Componenta\VarExport\Tests\Fixture\unscopedPrivateConstantClosure();
     $restored = new ObjectContextExpressionEvaluator()->evaluateClosure(VarExport::withDefaults()->export($original));
 
-    expect(fn (): int => $original(ObjectContextExpressionEvaluator::class))->toThrow(Error::class)
-        ->and(fn (): int => $restored(ObjectContextExpressionEvaluator::class))->toThrow(Error::class);
+    expect(ObjectContextExpressionEvaluator::privateValue())->toBe(42)
+        ->and(fn (): mixed => $original(ObjectContextExpressionEvaluator::class))->toThrow(Error::class)
+        ->and(fn (): mixed => $restored(ObjectContextExpressionEvaluator::class))->toThrow(Error::class);
 });
