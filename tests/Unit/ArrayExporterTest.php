@@ -159,3 +159,49 @@ it('limits excessive array nesting without poisoning subsequent exports', functi
     expect(fn (): string => $exporter->export($value))->toThrow(ExportException::class, 'deeper than 256')
         ->and($exporter->export([42]))->toBe("[\n    42,\n]");
 });
+
+it('preserves diagnostics through nested default and directly bound array exporters', function (bool $direct): void {
+    $value = 42;
+    $input = ['nested' => ['value' => &$value]];
+    $chain = VarExport::withDefaults();
+    $exporter = $direct ? (new ArrayExporter())->withVarExport($chain) : $chain;
+
+    try {
+        $exporter->export($input);
+        throw new \LogicException('Expected the array reference to be rejected.');
+    } catch (ExportException $error) {
+        expect($error->context['path'])->toBe(['nested', 'value']);
+    }
+})->with([false, true]);
+
+it('keeps independent recursive exports isolated when a custom exporter suspends a Fiber', function (): void {
+    $marker = new stdClass();
+    $custom = new CallbackExporter(static function (mixed $var) use ($marker): ?string {
+        if ($var !== $marker) {
+            return null;
+        }
+
+        \Fiber::suspend('paused');
+
+        return '42';
+    });
+    $exporter = new VarExport($custom, new ScalarExporter(), new ArrayExporter());
+    $nested = $marker;
+    $expected = 42;
+    for ($depth = 0; $depth < 256; ++$depth) {
+        $nested = [$nested];
+        $expected = [$expected];
+    }
+
+    $fiber = new \Fiber(static fn (): string => $exporter->export($nested));
+    expect($fiber->start())->toBe('paused')
+        ->and(evaluateExpression($exporter->export([1])))->toBe([1]);
+    $fiber->resume();
+
+    $result = $fiber->getReturn();
+    if (!is_string($result)) {
+        throw new \LogicException('Expected the Fiber to return an expression.');
+    }
+
+    expect(evaluateExpression($result))->toBe($expected);
+});

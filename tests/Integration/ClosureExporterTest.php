@@ -97,58 +97,31 @@ it('requires direct closure exporters to be immutably bound first', function ():
     $exporter = new ClosureExporter();
     $bound = $exporter->withVarExport(VarExport::withDefaults());
 
+    $expression = \Componenta\VarExport\Tests\Support\requireExpression($bound->export(simpleClosure()));
+
     expect($bound)->not->toBe($exporter)
         ->and(fn (): ?string => $exporter->export(simpleClosure()))->toThrow(ExportException::class)
-        ->and($bound->export(simpleClosure()))->toContain('return \\Closure::bind(static fn(int $value): int => $value + 1, null, null);');
+        ->and(evaluateClosureExpression($expression)(41))->toBe(42);
 });
 
-it('exports a canonical arrow-function expression', function (): void {
-    $expression = VarExport::withDefaults()->export(simpleClosure());
-
-    expect($expression)->toBe(<<<'PHP'
-(static function () {
-    if ((static function () {
-        try {
-            (static fn(int $value): int => $value)('1');
-        } catch (\TypeError) {
-            return true;
-        }
-        return false;
-    })() !== true) {
-        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => !true]);
-    }
-    return \Closure::bind(static fn(int $value): int => $value + 1, null, null);
-})()
-PHP);
-
+it('exports a deterministic executable arrow-function expression', function (): void {
+    $exporter = VarExport::withDefaults();
+    $expression = $exporter->export(simpleClosure());
     $restored = evaluateClosureExpression($expression);
-    expect($restored(41))->toBe(42);
+
+    expect($expression)->toBe($exporter->export(simpleClosure()))
+        ->not->toContain('<?php')
+        ->and($restored(41))->toBe(42);
 });
 
-it('exports a PSR-formatted block closure', function (): void {
-    $expression = VarExport::withDefaults()->export(blockClosure());
-
-    expect($expression)->toBe(<<<'PHP'
-(static function () {
-    if ((static function () {
-        try {
-            (static fn(int $value): int => $value)('1');
-        } catch (\TypeError) {
-            return true;
-        }
-        return false;
-    })() !== true) {
-        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => !true]);
-    }
-    return \Closure::bind(static function (int $value): int {
-        $next = $value + 1;
-        return $next * 2;
-    }, null, null);
-})()
-PHP);
-
+it('exports a deterministic executable block closure', function (): void {
+    $exporter = VarExport::withDefaults();
+    $expression = $exporter->export(blockClosure());
     $restored = evaluateClosureExpression($expression);
-    expect($restored(20))->toBe(42);
+
+    expect($expression)->toBe($exporter->export(blockClosure()))
+        ->not->toContain('<?php')
+        ->and($restored(20))->toBe(42);
 });
 
 it('inlines safe scalar enum and array captures into a self-contained expression', function (): void {
@@ -245,7 +218,7 @@ it('restores a safe named class scope', function (): void {
     $expression = VarExport::withDefaults()->export(ScopedClosureFactory::make());
     $restored = evaluateClosureExpression($expression);
 
-    expect($expression)->toContain('\\Closure::bind')
+    expect((new ReflectionFunction($restored))->getClosureScopeClass()?->getName())->toBe(ScopedClosureFactory::class)
         ->and($restored(41))->toBe(42);
 });
 

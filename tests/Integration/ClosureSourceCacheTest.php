@@ -40,3 +40,29 @@ it('reuses source metadata without sharing captured values or mutating the cache
         unlink($path);
     }
 });
+
+it('does not share generated strict-mode guards between strict and coercive source files', function (): void {
+    $strict = createTemporaryPhpFile('componenta-strict-cache-', '<?php declare(strict_types=1); return static fn (): int => 42;');
+    $coercive = createTemporaryPhpFile('componenta-coercive-cache-', '<?php declare(strict_types=0); return static fn (): int => "42";');
+    $target = null;
+    $exporter = VarExport::withDefaults();
+
+    try {
+        $strictClosure = requireClosureFile($strict);
+        $coerciveClosure = requireClosureFile($coercive);
+        $strictExpression = $exporter->export($strictClosure);
+        $coerciveExpression = $exporter->export($coerciveClosure);
+        $target = createTemporaryPhpFile('componenta-coercive-target-', '<?php declare(strict_types=0); return ' . $coerciveExpression . ';');
+
+        expect(evaluateClosureExpression($strictExpression)())->toBe(42)
+            ->and(requireClosureFile($target)())->toBe(42)
+            ->and($exporter->export($strictClosure))->toBe($strictExpression)
+            ->and(fn (): \Closure => evaluateClosureExpression($coerciveExpression))->toThrow(ExportException::class, 'strict_types');
+    } finally {
+        unlink($strict);
+        unlink($coercive);
+        if ($target !== null) {
+            unlink($target);
+        }
+    }
+});
