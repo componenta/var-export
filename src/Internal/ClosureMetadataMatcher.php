@@ -613,11 +613,25 @@ final class ClosureMetadataMatcher
             }
 
             $key = $this->sourceDefaultValue($item->key);
-            if (!$key['verifiable'] || !is_int($key['value']) && !is_string($key['value'])) {
+            if (!$key['verifiable']) {
                 return ['verifiable' => false, 'value' => null];
             }
 
-            $value[$key['value']] = $itemValue['value'];
+            $index = $key['value'];
+            if ($index === null) {
+                $index = '';
+            } elseif (is_bool($index)) {
+                $index = (int) $index;
+            } elseif (is_float($index) && is_finite($index) && (float) (int) $index === $index) {
+                // Only lossless integer conversion is free of PHP diagnostics.
+                $index = (int) $index;
+            }
+
+            if (!is_int($index) && !is_string($index)) {
+                return ['verifiable' => false, 'value' => null];
+            }
+
+            $value[$index] = $itemValue['value'];
         }
 
         return ['verifiable' => true, 'value' => $value];
