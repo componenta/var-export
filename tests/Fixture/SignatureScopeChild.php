@@ -8,6 +8,13 @@ use Closure;
 
 final class SignatureScopeChild extends SignatureScopeBase
 {
+    protected const int DEFAULT_VALUE = 42;
+
+    public static function scopedDefaults(): Closure
+    {
+        return static fn (int $self = self::DEFAULT_VALUE, int $parent = parent::DEFAULT_VALUE): array => [$self, $parent];
+    }
+
     public static function nullable(): Closure
     {
         return static fn (?int $value = null): ?int => $value;

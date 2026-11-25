@@ -410,7 +410,7 @@ final class ClosureMetadataMatcher
 
         if ($parameter->isDefaultValueConstant()) {
             $runtimeName = $parameter->getDefaultValueConstantName();
-            $sourceName = $this->constantDefaultName($default, $reflection);
+            $sourceName = $this->constantDefaultName($default);
 
             return is_string($runtimeName)
                 && $sourceName !== null
@@ -446,7 +446,40 @@ final class ClosureMetadataMatcher
             );
         }
 
-        return self::sameValue($runtimeValue, $sourceValue['value']);
+        $expected = $sourceValue['value'];
+        if (is_int($expected) && self::promotesIntegerDefault($parameter->getType())) {
+            $expected = (float) $expected;
+        }
+
+        return self::sameValue($runtimeValue, $expected);
+    }
+
+    private static function promotesIntegerDefault(?ReflectionType $type): bool
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return $type->getName() === 'float';
+        }
+
+        if (!$type instanceof ReflectionUnionType) {
+            return false;
+        }
+
+        $hasFloat = false;
+        foreach ($type->getTypes() as $member) {
+            if (!$member instanceof ReflectionNamedType) {
+                continue;
+            }
+
+            if ($member->getName() === 'int') {
+                return false;
+            }
+
+            if ($member->getName() === 'float') {
+                $hasFloat = true;
+            }
+        }
+
+        return $hasFloat;
     }
 
     private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
@@ -502,7 +535,7 @@ final class ClosureMetadataMatcher
         return $left === $right;
     }
 
-    private function constantDefaultName(Node\Expr $default, ReflectionFunction $reflection): ?string
+    private function constantDefaultName(Node\Expr $default): ?string
     {
         if ($default instanceof ConstFetch) {
             $namespaced = $default->name->getAttribute('namespacedName');
@@ -516,9 +549,10 @@ final class ClosureMetadataMatcher
             return null;
         }
 
-        $class = $this->nodeType($default->class, $reflection);
-
-        return $class === null ? null : $class . '::' . $default->name->name;
+        // Reflection retains self:: and parent:: for default constants even
+        // when the class scope is known. NameResolver has already qualified
+        // ordinary class names; special class names must remain lexical.
+        return $default->class->toString() . '::' . $default->name->name;
     }
 
     /** @return array{verifiable: bool, value: mixed} */
