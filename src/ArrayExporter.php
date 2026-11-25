@@ -6,18 +6,17 @@ namespace Componenta\VarExport;
 
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Internal\ArrayExportException;
-use Fiber;
+use Componenta\VarExport\Internal\ContextualExporterInterface;
+use Componenta\VarExport\Internal\ExportContext;
+use Componenta\VarExport\Internal\ExpressionIndentation;
 use ReflectionReference;
 
-final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
+final class ArrayExporter implements ContextualExporterInterface, VarExportAwareInterface
 {
     private const int MAX_DEPTH = 256;
 
     private ?VarExport $varExport = null;
     private readonly ScalarExporter $keyExporter;
-
-    /** @var array<int, int> */
-    private array $activeDepths = [];
 
     public function __construct()
     {
@@ -28,7 +27,6 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
     {
         $exporter = clone $this;
         $exporter->varExport = $varExport;
-        $exporter->activeDepths = [];
 
         return $exporter;
     }
@@ -44,64 +42,66 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
             throw ExportException::exporterIsNotBound(self::class);
         }
 
-        $fiber = Fiber::getCurrent();
-        $context = $fiber === null ? 0 : spl_object_id($fiber);
-        $depth = $this->activeDepths[$context] ?? 0;
-        if ($depth >= self::MAX_DEPTH) {
-            throw ArrayExportException::depth(self::MAX_DEPTH);
-        }
+        $context = new ExportContext(
+            static function (mixed $value, int $depth, array $path) use ($varExport): string {
+                try {
+                    $expression = $varExport->export($value);
+                } catch (ArrayExportException $error) {
+                    if (!is_array($value)) {
+                        throw $error;
+                    }
 
-        $this->activeDepths[$context] = $depth + 1;
-        try {
-            return $this->exportArray($var, $varExport);
-        } finally {
-            if ($depth === 0) {
-                unset($this->activeDepths[$context]);
-            } else {
-                $this->activeDepths[$context] = $depth;
-            }
-        }
+                    throw $error->withPrependedPath($path);
+                }
+
+                return ExpressionIndentation::atDepth($expression, $depth);
+            },
+        );
+
+        return $this->exportInContext($var, $context);
     }
 
-    /**
-     * @param array<mixed> $array
-     */
-    private function exportArray(array $array, VarExport $varExport): string
+    /** @internal */
+    public function exportInContext(mixed $var, ExportContext $context): ?string
     {
+        if (!is_array($var)) {
+            return null;
+        }
+
+        if ($this->varExport === null) {
+            throw ExportException::exporterIsNotBound(self::class);
+        }
+
+        if ($context->depth >= self::MAX_DEPTH) {
+            throw ArrayExportException::depth(self::MAX_DEPTH, $context->path);
+        }
+
+        $array = $var;
         if (key($array) !== array_key_first($array)) {
-            throw ArrayExportException::pointer([]);
+            throw ArrayExportException::pointer($context->path);
         }
 
         $isList = array_is_list($array);
         $literalIndex = $isList ? count($array) : $this->literalAppendIndex($array);
 
         if ($this->nextAppendIndex($array) !== $literalIndex) {
-            throw ArrayExportException::appendIndex([]);
+            throw ArrayExportException::appendIndex($context->path);
         }
 
         if ($array === []) {
             return '[]';
         }
 
-        $itemIndent = '    ';
+        $itemIndent = str_repeat(' ', ($context->depth + 1) * 4);
+        $closingIndent = str_repeat(' ', $context->depth * 4);
         $entries = [];
 
         foreach ($array as $key => $value) {
             if (ReflectionReference::fromArrayElement($array, $key) !== null) {
-                throw ArrayExportException::reference([$key]);
+                throw ArrayExportException::reference([...$context->path, $key]);
             }
 
-            try {
-                $expression = $varExport->export($value);
-            } catch (ArrayExportException $error) {
-                if (!is_array($value)) {
-                    throw $error;
-                }
-
-                throw $error->withPrependedKey($key);
-            }
-
-            $expression = $this->indentExpression($expression, $itemIndent);
+            $expression = $context->exportChild($value, $key);
 
             $keyExpression = $isList
                 ? ''
@@ -112,6 +112,7 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         return "[\n"
             . implode(",\n", $entries)
             . ",\n"
+            . $closingIndent
             . ']';
     }
 
@@ -148,40 +149,5 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
     {
         return $this->keyExporter->export($key)
             ?? throw new \LogicException('Array keys are always supported by ScalarExporter.');
-    }
-
-    private function indentExpression(string $expression, string $indent): string
-    {
-        if (!str_contains($expression, "\n")) {
-            return $expression;
-        }
-
-        $result = '';
-
-        foreach (token_get_all('<?php ' . $expression) as $token) {
-            if (is_array($token)) {
-                [$id, $text] = $token;
-                if ($id === T_OPEN_TAG) {
-                    continue;
-                }
-
-                if (in_array($id, [
-                    T_CONSTANT_ENCAPSED_STRING,
-                    T_ENCAPSED_AND_WHITESPACE,
-                    T_START_HEREDOC,
-                    T_END_HEREDOC,
-                ], true)) {
-                    $result .= $text;
-
-                    continue;
-                }
-            } else {
-                $text = $token;
-            }
-
-            $result .= str_replace("\n", "\n" . $indent, $text);
-        }
-
-        return $result;
     }
 }

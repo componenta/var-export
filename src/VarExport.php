@@ -6,6 +6,9 @@ namespace Componenta\VarExport;
 
 use Componenta\VarExport\Exception\ExportException;
 use Componenta\VarExport\Exception\UnsupportedValueException;
+use Componenta\VarExport\Internal\ContextualExporterInterface;
+use Componenta\VarExport\Internal\ExportContext;
+use Componenta\VarExport\Internal\ExpressionIndentation;
 
 final readonly class VarExport
 {
@@ -41,11 +44,28 @@ final readonly class VarExport
             throw new ExportException('Cannot export values while exporters are being bound.');
         }
 
+        return $this->dispatch($var);
+    }
+
+    /** @param list<int|string> $path */
+    private function dispatch(mixed $var, int $depth = 0, array $path = []): string
+    {
         foreach ($this->exporters as $exporter) {
+            if ($exporter instanceof ContextualExporterInterface) {
+                $result = $exporter->exportInContext($var, new ExportContext($this->dispatch(...), $depth, $path));
+                if ($result !== null) {
+                    return $result;
+                }
+
+                continue;
+            }
+
             $result = $exporter->export($var);
 
             if ($result !== null) {
-                return $result;
+                return $depth === 0 || !str_contains($result, "\n")
+                    ? $result
+                    : ExpressionIndentation::atDepth($result, $depth);
             }
         }
 

@@ -48,9 +48,10 @@ final class ArrayExportException extends ExportException
         );
     }
 
-    public function withPrependedKey(int|string $key): self
+    /** @param list<int|string> $prefix */
+    public function withPrependedPath(array $prefix): self
     {
-        $path = [$key, ...$this->path];
+        $path = [...$prefix, ...$this->path];
 
         return match ($this->reason) {
             'reference' => self::reference($path),
