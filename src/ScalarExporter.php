@@ -6,7 +6,42 @@ namespace Componenta\VarExport;
 
 final readonly class ScalarExporter implements VarExportInterface
 {
-    public function export(mixed $var): ?string
+    private const array TEXT_ESCAPES = [
+        "\x00" => '\\x00',
+        "\x01" => '\\x01',
+        "\x02" => '\\x02',
+        "\x03" => '\\x03',
+        "\x04" => '\\x04',
+        "\x05" => '\\x05',
+        "\x06" => '\\x06',
+        "\x07" => '\\x07',
+        "\x08" => '\\x08',
+        "\x09" => '\\t',
+        "\x0A" => '\\n',
+        "\x0B" => '\\v',
+        "\x0C" => '\\f',
+        "\x0D" => '\\r',
+        "\x0E" => '\\x0E',
+        "\x0F" => '\\x0F',
+        "\x10" => '\\x10',
+        "\x11" => '\\x11',
+        "\x12" => '\\x12',
+        "\x13" => '\\x13',
+        "\x14" => '\\x14',
+        "\x15" => '\\x15',
+        "\x16" => '\\x16',
+        "\x17" => '\\x17',
+        "\x18" => '\\x18',
+        "\x19" => '\\x19',
+        "\x1A" => '\\x1A',
+        "\x1B" => '\\e',
+        "\x1C" => '\\x1C',
+        "\x1D" => '\\x1D',
+        "\x1E" => '\\x1E',
+        "\x1F" => '\\x1F',
+        "\x7F" => '\\x7F',
+        "\x22" => '\\"',
+        "\x24" => '\\(mixed $var): ?string
     {
         return match (true) {
             $var === null => 'null',
@@ -39,9 +74,9 @@ final readonly class ScalarExporter implements VarExportInterface
             return '\\NAN';
         }
 
-        $formatted = str_replace(',', '.', sprintf('%.16G', $value));
+        $formatted = sprintf('%.16H', $value);
         if ($value !== (float) $formatted) {
-            $formatted = str_replace(',', '.', sprintf('%.17G', $value));
+            $formatted = sprintf('%.17H', $value);
         }
 
         return preg_match('/^-?\d+$/D', $formatted) === 1
@@ -51,40 +86,18 @@ final readonly class ScalarExporter implements VarExportInterface
 
     private static function exportString(string $value): string
     {
-        $isUtf8 = preg_match('//u', $value) === 1;
-        $expression = '"';
-
-        for ($index = 0, $length = strlen($value); $index < $length; ++$index) {
-            $byte = ord($value[$index]);
-
-            $expression .= match ($byte) {
-                0x09 => '\\t',
-                0x0A => '\\n',
-                0x0B => '\\v',
-                0x0C => '\\f',
-                0x0D => '\\r',
-                0x1B => '\\e',
-                0x22 => '\\"',
-                0x24 => '\\$',
-                0x5C => '\\\\',
-                default => self::exportStringByte($value[$index], $byte, $isUtf8),
-            };
+        if (preg_match('//u', $value) === 1) {
+            return '"' . strtr($value, self::TEXT_ESCAPES) . '"';
         }
 
-        return $expression . '"';
+        static $binaryEscapes = null;
+        if ($binaryEscapes === null) {
+            $binaryEscapes = self::TEXT_ESCAPES;
+            for ($byte = 128; $byte <= 255; ++$byte) {
+                $binaryEscapes[chr($byte)] = sprintf('\\x%02X', $byte);
+            }
+        }
+
+        return '"' . strtr($value, $binaryEscapes) . '"';
     }
-
-    private static function exportStringByte(string $character, int $byte, bool $isUtf8): string
-    {
-        if ($byte >= 0x20 && $byte <= 0x7E) {
-            return $character;
-        }
-
-        if ($byte >= 0x80 && $isUtf8) {
-            return $character;
-        }
-
-        return sprintf('\\x%02X', $byte);
-    }
-
 }

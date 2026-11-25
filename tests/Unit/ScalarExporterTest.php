@@ -98,3 +98,29 @@ it('returns null for non-scalar values', function (mixed $value): void {
     'array' => [[]],
     'object' => [new stdClass()],
 ]);
+
+it('round-trips deterministic binary payloads of different lengths', function (): void {
+    $exporter = new ScalarExporter();
+    for ($index = 0; $index < 256; ++$index) {
+        $value = substr(hash('sha256', pack('N', $index), true), 0, $index % 33);
+        $expression = requireExpression($exporter->export($value));
+
+        expect(evaluateExpression($expression))->toBe($value);
+    }
+});
+
+it('preserves the bit representation of deterministic finite floating point values', function (): void {
+    $exporter = new ScalarExporter();
+    for ($index = 0; $index < 256; ++$index) {
+        $bits = substr(hash('sha256', pack('N', $index), true), 0, 8);
+        $unpacked = unpack('dvalue', $bits);
+        $value = $unpacked === false ? null : $unpacked['value'];
+        if (!is_float($value) || !is_finite($value)) {
+            continue;
+        }
+
+        $expression = requireExpression($exporter->export($value));
+
+        expect(pack('d', evaluateFloatExpression($expression)))->toBe($bits);
+    }
+});
