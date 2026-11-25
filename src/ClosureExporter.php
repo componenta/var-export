@@ -16,10 +16,13 @@ use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Array_;
 use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\AssignRef;
+use PhpParser\Node\Expr\BinaryOp\Coalesce;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
 use PhpParser\Node\Expr\ConstFetch;
+use PhpParser\Node\Expr\Empty_;
 use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\Isset_;
 use PhpParser\Node\Expr\List_;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Expr\UnaryMinus;
@@ -384,27 +387,26 @@ final class ClosureExporter implements VarExportInterface, VarExportAwareInterfa
             ->parse(sprintf(<<<'PHP'
 <?php
 return (static function () {
-    $componentaVarExportStrictTypes = false;
-
-    try {
-        (static fn (int $value): int => $value)('1');
-    } catch (\TypeError) {
-        $componentaVarExportStrictTypes = true;
-    }
-
-    if ($componentaVarExportStrictTypes !== %s) {
+    if ((static function () {
+        try {
+            (static fn (int $value): int => $value)('1');
+        } catch (\TypeError) {
+            return true;
+        }
+        return false;
+    })() !== %s) {
         throw new \Componenta\VarExport\Exception\ExportException(
             'Closure strict_types mode does not match the generated PHP file.',
             [
                 'source_strict_types' => %s,
-                'target_strict_types' => $componentaVarExportStrictTypes,
+                'target_strict_types' => !%s,
             ],
         );
     }
 
     return null;
 })();
-PHP, $sourceMode, $sourceMode));
+PHP, $sourceMode, $sourceMode, $sourceMode));
         $return = $statements[0] ?? null;
 
         if (
@@ -975,7 +977,11 @@ PHP, $sourceMode, $sourceMode));
         sort($runtimeNames);
 
         if ($node instanceof ArrowFunction) {
-            return $this->arrowCaptureNames($node) === $runtimeNames;
+            $required = $this->arrowCaptureNames($node);
+            $possible = $this->arrowCaptureNames($node, includeOptional: true);
+
+            return array_diff($required, $runtimeNames) === []
+                && array_diff($runtimeNames, $possible) === [];
         }
 
         $sourceNames = [];
@@ -1049,10 +1055,10 @@ PHP, $sourceMode, $sourceMode));
     }
 
     /** @return list<string> */
-    private function arrowCaptureNames(ArrowFunction $node): array
+    private function arrowCaptureNames(ArrowFunction $node, bool $includeOptional = false): array
     {
         $names = [];
-        $this->collectReadVariableNames($node->expr, $names);
+        $this->collectReadVariableNames($node->expr, $names, $includeOptional);
 
         foreach ([
             'GLOBALS',
@@ -1084,7 +1090,7 @@ PHP, $sourceMode, $sourceMode));
      * @param Node|array<mixed>|null $node
      * @param array<string, true> $names
      */
-    private function collectReadVariableNames(Node|array|null $node, array &$names): void
+    private function collectReadVariableNames(Node|array|null $node, array &$names, bool $includeOptional = false): void
     {
         if ($node === null) {
             return;
@@ -1093,7 +1099,7 @@ PHP, $sourceMode, $sourceMode));
         if (is_array($node)) {
             foreach ($node as $child) {
                 if ($child instanceof Node) {
-                    $this->collectReadVariableNames($child, $names);
+                    $this->collectReadVariableNames($child, $names, $includeOptional);
                 }
             }
 
@@ -1104,15 +1110,43 @@ PHP, $sourceMode, $sourceMode));
             if (is_string($node->name)) {
                 $names[$node->name] = true;
             } elseif ($node->name instanceof Node) {
-                $this->collectReadVariableNames($node->name, $names);
+                $this->collectReadVariableNames($node->name, $names, $includeOptional);
             }
 
             return;
         }
 
         if ($node instanceof Assign || $node instanceof AssignRef) {
-            $this->collectAssignmentTargetReads($node->var, $names);
-            $this->collectReadVariableNames($node->expr, $names);
+            if ($includeOptional) {
+                $this->collectReadVariableNames($node->var, $names, true);
+            } else {
+                $this->collectAssignmentTargetReads($node->var, $names);
+            }
+            $this->collectReadVariableNames($node->expr, $names, $includeOptional);
+
+            return;
+        }
+
+        if (!$includeOptional && $node instanceof Isset_) {
+            foreach ($node->vars as $variable) {
+                if (!$variable instanceof Variable || !is_string($variable->name)) {
+                    $this->collectReadVariableNames($variable, $names);
+                }
+            }
+
+            return;
+        }
+
+        if (!$includeOptional && $node instanceof Empty_
+            && $node->expr instanceof Variable && is_string($node->expr->name)
+        ) {
+            return;
+        }
+
+        if (!$includeOptional && $node instanceof Coalesce
+            && $node->left instanceof Variable && is_string($node->left->name)
+        ) {
+            $this->collectReadVariableNames($node->right, $names);
 
             return;
         }
@@ -1128,7 +1162,7 @@ PHP, $sourceMode, $sourceMode));
         }
 
         if ($node instanceof ArrowFunction) {
-            foreach ($this->arrowCaptureNames($node) as $name) {
+            foreach ($this->arrowCaptureNames($node, $includeOptional) as $name) {
                 $names[$name] = true;
             }
 
@@ -1138,7 +1172,7 @@ PHP, $sourceMode, $sourceMode));
         foreach ($node->getSubNodeNames() as $subNodeName) {
             $subNode = $node->{$subNodeName};
             if ($subNode instanceof Node || is_array($subNode)) {
-                $this->collectReadVariableNames($subNode, $names);
+                $this->collectReadVariableNames($subNode, $names, $includeOptional);
             }
         }
     }

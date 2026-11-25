@@ -107,14 +107,15 @@ it('exports a canonical arrow-function expression', function (): void {
 
     expect($expression)->toBe(<<<'PHP'
 (static function () {
-    $componentaVarExportStrictTypes = false;
-    try {
-        (static fn(int $value): int => $value)('1');
-    } catch (\TypeError) {
-        $componentaVarExportStrictTypes = true;
-    }
-    if ($componentaVarExportStrictTypes !== true) {
-        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => $componentaVarExportStrictTypes]);
+    if ((static function () {
+        try {
+            (static fn(int $value): int => $value)('1');
+        } catch (\TypeError) {
+            return true;
+        }
+        return false;
+    })() !== true) {
+        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => !true]);
     }
     return \Closure::bind(static fn(int $value): int => $value + 1, null, null);
 })()
@@ -129,14 +130,15 @@ it('exports a PSR-formatted block closure', function (): void {
 
     expect($expression)->toBe(<<<'PHP'
 (static function () {
-    $componentaVarExportStrictTypes = false;
-    try {
-        (static fn(int $value): int => $value)('1');
-    } catch (\TypeError) {
-        $componentaVarExportStrictTypes = true;
-    }
-    if ($componentaVarExportStrictTypes !== true) {
-        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => $componentaVarExportStrictTypes]);
+    if ((static function () {
+        try {
+            (static fn(int $value): int => $value)('1');
+        } catch (\TypeError) {
+            return true;
+        }
+        return false;
+    })() !== true) {
+        throw new \Componenta\VarExport\Exception\ExportException('Closure strict_types mode does not match the generated PHP file.', ['source_strict_types' => true, 'target_strict_types' => !true]);
     }
     return \Closure::bind(static function (int $value): int {
         $next = $value + 1;
