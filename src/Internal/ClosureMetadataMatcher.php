@@ -361,7 +361,19 @@ final class ClosureMetadataMatcher
                 $sourceArguments[$argument->name?->toString() ?? $argumentIndex] = $source['value'];
             }
 
-            if (!self::sameValue($sourceArguments, $reflectionAttribute->getArguments())) {
+            try {
+                $runtimeArguments = $reflectionAttribute->getArguments();
+            } catch (\Error $error) {
+                throw new ExportException(
+                    sprintf('Cannot verify runtime arguments for attribute "%s".', $reflectionAttribute->getName()),
+                    ['attribute' => $reflectionAttribute->getName()],
+                    $reflection->getFileName() ?: null,
+                    $reflection->getStartLine() ?: null,
+                    $error,
+                );
+            }
+
+            if (!self::sameValue($sourceArguments, $runtimeArguments)) {
                 return false;
             }
         }
@@ -422,7 +434,19 @@ final class ClosureMetadataMatcher
             );
         }
 
-        return self::sameValue($parameter->getDefaultValue(), $sourceValue['value']);
+        try {
+            $runtimeValue = $parameter->getDefaultValue();
+        } catch (\Error | \ReflectionException $error) {
+            throw new ExportException(
+                sprintf('Cannot verify runtime default for parameter $%s.', $parameter->getName()),
+                ['parameter' => $parameter->getName()],
+                $reflection->getFileName() ?: null,
+                $reflection->getStartLine() ?: null,
+                $error,
+            );
+        }
+
+        return self::sameValue($runtimeValue, $sourceValue['value']);
     }
 
     private static function reflectionParameterDefaultSyntax(ReflectionParameter $parameter): ?string
