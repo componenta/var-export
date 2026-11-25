@@ -212,13 +212,20 @@ final class ClosureMetadataMatcher
         }
 
         if ($type instanceof UnionType || $type instanceof IntersectionType) {
-            return $this->typeSet(
-                $type instanceof UnionType ? 'union' : 'intersection',
-                array_values(array_map(
-                    fn (Identifier|Name|IntersectionType $member): string => $this->nodeType($member, $reflection) ?? '',
-                    $type->types,
-                )),
-            );
+            $members = [];
+            foreach ($type->types as $member) {
+                $name = $this->nodeType($member, $reflection) ?? '';
+                if ($type instanceof UnionType && $name === 'iterable') {
+                    $members[] = 'Traversable';
+                    $members[] = 'array';
+
+                    continue;
+                }
+
+                $members[] = $name;
+            }
+
+            return $this->typeSet($type instanceof UnionType ? 'union' : 'intersection', $members);
         }
 
         if ($type instanceof Identifier) {
