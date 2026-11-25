@@ -50,6 +50,7 @@
         "test": "pest",
         "test-coverage": "pest --coverage --min=90",
         "mutation": "pest --mutate --path=src --everything --min=90 --compact",
+        "benchmark": "php benchmarks/var-export.php",
         "phpstan": "phpstan analyse src tests --level=max",
         "cs-check": "php-cs-fixer fix --dry-run --diff",
         "cs-fix": "php-cs-fixer fix",
