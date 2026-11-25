@@ -5,16 +5,24 @@ declare(strict_types=1);
 namespace Componenta\VarExport;
 
 use Componenta\VarExport\Exception\ExportException;
+use Componenta\VarExport\Internal\ArrayExportException;
+use Fiber;
 use ReflectionReference;
 
 final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
 {
+    private const int MAX_DEPTH = 256;
+
     private ?VarExport $varExport = null;
+
+    /** @var array<int, int> */
+    private array $activeDepths = [];
 
     public function withVarExport(VarExport $varExport): static
     {
         $exporter = clone $this;
         $exporter->varExport = $varExport;
+        $exporter->activeDepths = [];
 
         return $exporter;
     }
@@ -30,21 +38,32 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
             throw ExportException::exporterIsNotBound(self::class);
         }
 
-        return $this->exportArray($var, $varExport);
+        $fiber = Fiber::getCurrent();
+        $context = $fiber === null ? 0 : spl_object_id($fiber);
+        $depth = $this->activeDepths[$context] ?? 0;
+        if ($depth >= self::MAX_DEPTH) {
+            throw ArrayExportException::depth(self::MAX_DEPTH);
+        }
+
+        $this->activeDepths[$context] = $depth + 1;
+        try {
+            return $this->exportArray($var, $varExport);
+        } finally {
+            if ($depth === 0) {
+                unset($this->activeDepths[$context]);
+            } else {
+                $this->activeDepths[$context] = $depth;
+            }
+        }
     }
 
     /**
      * @param array<mixed> $array
-     * @param list<int|string> $path
      */
-    private function exportArray(
-        array $array,
-        VarExport $varExport,
-        int $depth = 0,
-        array $path = [],
-    ): string {
+    private function exportArray(array $array, VarExport $varExport): string
+    {
         if (key($array) !== array_key_first($array)) {
-            throw ExportException::arrayPointer($path);
+            throw ExportException::arrayPointer([]);
         }
 
         $literalKeys = [];
@@ -53,7 +72,7 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         }
 
         if ($this->nextAppendIndex($array) !== $this->nextAppendIndex($literalKeys)) {
-            throw ExportException::arrayAppendIndex($path);
+            throw ExportException::arrayAppendIndex([]);
         }
 
         if ($array === []) {
@@ -61,23 +80,25 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         }
 
         $isList = array_is_list($array);
-        $itemIndent = str_repeat(' ', ($depth + 1) * 4);
-        $closingIndent = str_repeat(' ', $depth * 4);
+        $itemIndent = '    ';
         $entries = [];
 
         foreach ($array as $key => $value) {
-            $itemPath = [...$path, $key];
-
             if (ReflectionReference::fromArrayElement($array, $key) !== null) {
-                throw ExportException::arrayReference($itemPath);
+                throw ExportException::arrayReference([$key]);
             }
 
-            if (is_array($value)) {
-                $expression = $this->exportArray($value, $varExport, $depth + 1, $itemPath);
-            } else {
+            try {
                 $expression = $varExport->export($value);
-                $expression = $this->indentExpression($expression, $itemIndent);
+            } catch (ArrayExportException $error) {
+                if (!is_array($value)) {
+                    throw $error;
+                }
+
+                throw $error->withPrependedKey($key);
             }
+
+            $expression = $this->indentExpression($expression, $itemIndent);
 
             $keyExpression = $isList
                 ? ''
@@ -88,7 +109,6 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
         return "[\n"
             . implode(",\n", $entries)
             . ",\n"
-            . $closingIndent
             . ']';
     }
 
@@ -112,6 +132,10 @@ final class ArrayExporter implements VarExportInterface, VarExportAwareInterface
 
     private function indentExpression(string $expression, string $indent): string
     {
+        if (!str_contains($expression, "\n")) {
+            return $expression;
+        }
+
         $result = '';
 
         foreach (token_get_all('<?php ' . $expression) as $token) {

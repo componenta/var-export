@@ -138,3 +138,24 @@ it('rejects recursive reference arrays', function (): void {
     expect(fn (): string => VarExport::withDefaults()->export($array))
         ->toThrow(ExportException::class, 'reference');
 });
+
+it('applies exporter priority equally to arrays nested at every level', function (): void {
+    $custom = new CallbackExporter(static fn (mixed $var): ?string => $var === [42] ? '[99]' : null);
+    $exporter = new VarExport($custom, new ScalarExporter(), new ArrayExporter());
+
+    expect(evaluateExpression($exporter->export([42])))->toBe([99])
+        ->and(evaluateExpression($exporter->export([[42]])))->toBe([[99]])
+        ->and(evaluateExpression($exporter->export(['nested' => [[42]]])))->toBe(['nested' => [[99]]]);
+});
+
+it('limits excessive array nesting without poisoning subsequent exports', function (): void {
+    $value = [];
+    for ($depth = 0; $depth < 256; ++$depth) {
+        $value = [$value];
+    }
+
+    $exporter = VarExport::withDefaults();
+
+    expect(fn (): string => $exporter->export($value))->toThrow(ExportException::class, 'deeper than 256')
+        ->and($exporter->export([42]))->toBe("[\n    42,\n]");
+});
