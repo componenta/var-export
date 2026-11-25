@@ -9,8 +9,10 @@ use PhpParser\Node;
 use PhpParser\Node\ComplexType;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Array_;
+use PhpParser\Node\Expr\ArrayDimFetch;
 use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\AssignRef;
+use PhpParser\Node\Expr\AssignOp\Coalesce as CoalesceAssignment;
 use PhpParser\Node\Expr\BinaryOp\Coalesce;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\Closure as ClosureNode;
@@ -18,6 +20,8 @@ use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\Empty_;
 use PhpParser\Node\Expr\Isset_;
 use PhpParser\Node\Expr\List_;
+use PhpParser\Node\Expr\NullsafePropertyFetch;
+use PhpParser\Node\Expr\PropertyFetch;
 use PhpParser\Node\Expr\UnaryMinus;
 use PhpParser\Node\Expr\UnaryPlus;
 use PhpParser\Node\Expr\Variable;
@@ -715,24 +719,28 @@ final class ClosureMetadataMatcher
 
         if (!$includeOptional && $node instanceof Isset_) {
             foreach ($node->vars as $variable) {
-                if (!$variable instanceof Variable || !is_string($variable->name)) {
-                    $this->collectReadVariableNames($variable, $names);
-                }
+                $this->collectQuietAccessReads($variable, $names);
             }
 
             return;
         }
 
-        if (!$includeOptional && $node instanceof Empty_
-            && $node->expr instanceof Variable && is_string($node->expr->name)
-        ) {
+        if (!$includeOptional && $node instanceof Empty_) {
+            $this->collectQuietAccessReads($node->expr, $names);
+
             return;
         }
 
-        if (!$includeOptional && $node instanceof Coalesce
-            && $node->left instanceof Variable && is_string($node->left->name)
-        ) {
+        if (!$includeOptional && $node instanceof Coalesce) {
+            $this->collectQuietAccessReads($node->left, $names);
             $this->collectReadVariableNames($node->right, $names);
+
+            return;
+        }
+
+        if (!$includeOptional && $node instanceof CoalesceAssignment) {
+            $this->collectQuietAccessReads($node->var, $names);
+            $this->collectReadVariableNames($node->expr, $names);
 
             return;
         }
@@ -763,10 +771,46 @@ final class ClosureMetadataMatcher
         }
     }
 
+    /**
+     * A quiet access may read a missing base variable without an undefined-variable warning.
+     * Index and property-name expressions still have their ordinary read semantics.
+     *
+     * @param array<string, true> $names
+     */
+    private function collectQuietAccessReads(Node\Expr $target, array &$names): void
+    {
+        if ($target instanceof Variable && is_string($target->name)) {
+            return;
+        }
+
+        if ($target instanceof ArrayDimFetch) {
+            $this->collectQuietAccessReads($target->var, $names);
+            $this->collectReadVariableNames($target->dim, $names);
+
+            return;
+        }
+
+        if ($target instanceof PropertyFetch || $target instanceof NullsafePropertyFetch) {
+            $this->collectQuietAccessReads($target->var, $names);
+            $this->collectReadVariableNames($target->name, $names);
+
+            return;
+        }
+
+        $this->collectReadVariableNames($target, $names);
+    }
+
     /** @param array<string, true> $names */
     private function collectAssignmentTargetReads(Node\Expr $target, array &$names): void
     {
         if ($target instanceof Variable) {
+            return;
+        }
+
+        if ($target instanceof ArrayDimFetch) {
+            $this->collectAssignmentTargetReads($target->var, $names);
+            $this->collectReadVariableNames($target->dim, $names);
+
             return;
         }
 
